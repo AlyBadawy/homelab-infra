@@ -1,0 +1,334 @@
+- name: Bootstrap ArgoCD with root application (GitOps)
+  hosts: homelab
+
+  vars:
+    kubeconfig_path: "/etc/rancher/k3s/k3s.yaml"
+    argocd_namespace: "argocd"
+    root_app_path: "{{ playbook_dir }}/../k8s/argocd/root-app.yaml"
+    cmp_plugin_path: "{{ playbook_dir }}/../k8s/argocd/cmp-plugin.yaml"
+    helm_values_path: "{{ playbook_dir }}/../k8s/argocd/helm-values.yaml"
+
+  tasks:
+    # ────────────────────────────────────────────────────────────────────────────
+    # Create namespaces
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Create argocd namespace
+      become: true
+      shell: |
+        kubectl create namespace {{ argocd_namespace }} --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: ns_create
+      changed_when: "'created' in ns_create.stdout.lower()"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Apply CMP plugin ConfigMap (must be before ArgoCD installation)
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Read CMP plugin ConfigMap
+      slurp:
+        src: "{{ cmp_plugin_path }}"
+      register: cmp_plugin_manifest
+      delegate_to: localhost
+
+    - name: Write CMP plugin to temp file
+      copy:
+        content: "{{ cmp_plugin_manifest.content | b64decode }}"
+        dest: /tmp/cmp-plugin.yaml
+
+    - name: Apply CMP plugin ConfigMap
+      become: true
+      shell: |
+        kubectl apply -f /tmp/cmp-plugin.yaml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: cmp_apply
+      changed_when: "'created' in cmp_apply.stdout.lower()"
+
+    - name: Display CMP plugin creation
+      debug:
+        msg: "{{ cmp_apply.stdout_lines }}"
+      when: cmp_apply.stdout | length > 0
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Install ArgoCD via Helm (let Helm manage CRDs properly)
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Add Argo Helm repository
+      become: true
+      shell: |
+        helm repo add argo https://argoproj.github.io/argo-helm
+        helm repo update argo
+      register: helm_repo_add
+
+    - name: Display Helm repo addition
+      debug:
+        msg: "{{ helm_repo_add.stdout_lines }}"
+
+    - name: Read ArgoCD Helm values
+      slurp:
+        src: "{{ helm_values_path }}"
+      register: helm_values_manifest
+      delegate_to: localhost
+
+    - name: Write Helm values to temp file
+      copy:
+        content: "{{ helm_values_manifest.content | b64decode }}"
+        dest: /tmp/argocd-helm-values.yaml
+
+    - name: Check if ArgoCD Helm release exists
+      become: true
+      shell: |
+        helm list -n {{ argocd_namespace }} | grep argocd || echo "NOT_FOUND"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: helm_release_check
+      changed_when: false
+
+    - name: Delete existing ArgoCD Helm release (if exists)
+      become: true
+      shell: |
+        helm delete argocd -n {{ argocd_namespace }} || true
+        sleep 5
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when: "'argocd' in helm_release_check.stdout"
+      changed_when: true
+
+    - name: Clean up remaining ArgoCD resources
+      become: true
+      shell: |
+        # Delete all ArgoCD resources except CRDs (always, to ensure clean state)
+        kubectl delete all -n {{ argocd_namespace }} --all 2>/dev/null || true
+        kubectl delete clusterrole,clusterrolebinding -l app.kubernetes.io/part-of=argocd 2>/dev/null || true
+        kubectl delete role,rolebinding -n {{ argocd_namespace }} -l app.kubernetes.io/part-of=argocd 2>/dev/null || true
+        kubectl delete sa -n {{ argocd_namespace }} -l app.kubernetes.io/part-of=argocd 2>/dev/null || true
+        sleep 5
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: false
+
+    - name: Install/Upgrade ArgoCD via Helm
+      become: true
+      shell: |
+        helm upgrade --install argocd argo/argo-cd \
+          --namespace {{ argocd_namespace }} \
+          --create-namespace \
+          -f /tmp/argocd-helm-values.yaml \
+          --force \
+          --wait --timeout 10m
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: helm_install
+
+    - name: Display Helm installation result
+      debug:
+        msg: "{{ helm_install.stdout_lines }}"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Register git repository in ArgoCD
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Read cluster-vars ConfigMap to get GITHUB_REPO
+      become: true
+      shell: |
+        kubectl get configmap cluster-vars -n {{ argocd_namespace }} \
+          -o jsonpath='{.data.GITHUB_REPO}' 2>/dev/null || echo ""
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: github_repo
+      changed_when: false
+
+    - name: Fail if GITHUB_REPO not found
+      fail:
+        msg: |
+          GITHUB_REPO not found in cluster-vars ConfigMap.
+          This should have been created by ansible/apply-secrets.yml
+          Run: ansible-playbook -i ansible/inventory.ini ansible/apply-secrets.yml
+      when: github_repo.stdout | length == 0
+
+    - name: Create ArgoCD git repository secret
+      become: true
+      shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: homelab-repo
+          namespace: {{ argocd_namespace }}
+          labels:
+            argocd.argoproj.io/secret-type: repository
+        stringData:
+          type: git
+          url: {{ github_repo.stdout }}
+          username: git
+          password: ""
+        EOF
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: repo_secret
+      changed_when: "'created' in repo_secret.stdout.lower()"
+
+    - name: Display git repository registration
+      debug:
+        msg: |
+          Git repository registered: {{ github_repo.stdout }}
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Apply root Application (App-of-Apps)
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Read root application manifest
+      slurp:
+        src: "{{ root_app_path }}"
+      register: root_app_manifest
+      delegate_to: localhost
+
+    - name: Write root application to temp file
+      copy:
+        content: "{{ root_app_manifest.content | b64decode }}"
+        dest: /tmp/root-app.yaml
+
+    - name: Apply root application
+      become: true
+      shell: |
+        kubectl apply -f /tmp/root-app.yaml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: root_app_apply
+      changed_when: "'created' in root_app_apply.stdout.lower()"
+
+    - name: Display root application creation
+      debug:
+        msg: "{{ root_app_apply.stdout_lines }}"
+      when: root_app_apply.stdout | length > 0
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Wait for root application to sync
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Wait for root application to be created
+      become: true
+      shell: |
+        kubectl get application root -n {{ argocd_namespace }} -o name
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: root_app_wait
+      until: root_app_wait.rc == 0
+      retries: 10
+      delay: 3
+      changed_when: false
+
+    - name: Check for child applications (may take time to appear)
+      become: true
+      shell: |
+        app_count=$(kubectl get applications -n {{ argocd_namespace }} --no-headers 2>/dev/null | wc -l)
+        echo $app_count
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: app_count
+      retries: 10
+      delay: 5
+      changed_when: false
+      until: (app_count.stdout | int) > 1
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Monitor sync progress
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Get all applications
+      become: true
+      shell: |
+        kubectl get applications -n {{ argocd_namespace }} \
+          -o custom-columns=NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: all_apps
+      changed_when: false
+
+    - name: Display all applications
+      debug:
+        msg: "{{ all_apps.stdout_lines }}"
+
+    - name: Get root application sync status
+      become: true
+      shell: |
+        kubectl get application root -n {{ argocd_namespace }} \
+          -o jsonpath='{.status.sync.status} {.status.health.status} (Progress: {.status.operationState.phase})'
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: root_sync_status
+      changed_when: false
+
+    - name: Display root application status
+      debug:
+        msg: |
+          Root Application Sync Status: {{ root_sync_status.stdout }}
+          (Sync: OutOfSync → Syncing → Synced)
+          (Health: Progressing → Healthy)
+
+    - name: Display root application details
+      become: true
+      shell: |
+        kubectl describe application root -n {{ argocd_namespace }} | grep -A 10 "Status:"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: root_details
+      changed_when: false
+
+    - name: Show root application details
+      debug:
+        msg: "{{ root_details.stdout_lines }}"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Summary
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Summary
+      debug:
+        msg: |
+          ═══════════════════════════════════════════════════════════════
+          ArgoCD Bootstrap Complete — GitOps Active
+          ═══════════════════════════════════════════════════════════════
+
+          ✓ ArgoCD installed via Helm
+          ✓ CMP plugin (kustomize-envsubst) configured
+          ✓ Git repository registered: {{ github_repo.stdout }}
+          ✓ Root application deployed ({{ root_sync_status.stdout }})
+
+          Note: Child applications will appear asynchronously as the root
+          application syncs. This typically takes 1-3 minutes. ArgoCD will
+          automatically create applications from {{ github_repo.stdout }}:k8s/argocd/apps/
+
+          Current Application Status:
+          {{ all_apps.stdout }}
+
+          Next Steps:
+          1. Monitor root application sync progress:
+             # Check if root app is syncing
+             kubectl get application root -n {{ argocd_namespace }} -o jsonpath='{.status.sync.status} {.status.health.status}' ; echo
+
+             # Watch for child applications to appear (may take 1-3 minutes)
+             kubectl get applications -n {{ argocd_namespace }}
+             watch kubectl get applications -n {{ argocd_namespace }}
+
+          2. Force immediate sync if needed:
+             argocd app sync root
+             kubectl patch application root -n {{ argocd_namespace }} -p '{"metadata":{"annotations":{"argocd.argoproj.io/sync":""}}}' --type merge
+
+          3. Access ArgoCD UI:
+             kubectl port-forward -n {{ argocd_namespace }} svc/argocd-server 8080:443
+             https://localhost:8080
+
+          3. Get initial admin password:
+             kubectl get secret argocd-initial-admin-secret -n {{ argocd_namespace }} \
+               -o jsonpath='{.data.password}' | base64 -d; echo
+
+          4. Update applications via GitOps:
+             git commit -am "Update configuration"
+             git push
+             # ArgoCD automatically syncs within 3 minutes
+
+          Sync Waves (deployment order):
+          - Wave -1: root app (orchestrator)
+          - Wave 0:  ingress-nginx, longhorn
+          - Wave 1:  databases, monitoring
+          - Wave 2+: applications
+
+          All infrastructure and applications are now managed by ArgoCD.
+          Every change goes through git (true GitOps).
+
+          ═══════════════════════════════════════════════════════════════

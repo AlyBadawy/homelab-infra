@@ -237,6 +237,105 @@ ansible-playbook -i ansible/inventory.ini ansible/longhorn-backup-restore.yml
 7. Waits for volumes to be ready
 8. Displays final status and next steps
 
+### apply-secrets.yml
+Applies Kubernetes secrets and cluster configuration from NAS:
+- Reads secrets from `/mnt/nas/homelab/secrets.yaml`
+- Creates required namespaces (from secrets + argocd)
+- **Applies Kubernetes Secret objects** with base64-encoded data
+- Creates **cluster-vars ConfigMap** in argocd namespace for ArgoCD CMP variable substitution
+- Idempotent using `kubectl apply` with `--dry-run=client`
+- Use this **before deploying ArgoCD** to ensure all secrets and config are available
+
+**Run:**
+```bash
+ansible-playbook -i ansible/inventory.ini ansible/apply-secrets.yml
+```
+
+### argocd-bootstrap.yml
+Bootstraps the GitOps deployment by applying the root Application:
+- Verifies ArgoCD is installed
+- Verifies cluster-vars ConfigMap exists (from apply-secrets.yml)
+- Verifies CMP plugin is configured (in ArgoCD Helm values)
+- **Applies root application** from `k8s/argocd/root-app.yaml`
+- Waits for root app to be created
+- Monitors sync progress of all applications
+- Verifies namespaces are created
+- Displays sync wave deployment order
+
+**Prerequisites:**
+1. ArgoCD installed (via Helm)
+2. apply-secrets.yml run (creates cluster-vars ConfigMap)
+
+**Run:**
+```bash
+ansible-playbook -i ansible/inventory.ini ansible/argocd-bootstrap.yml
+```
+
+**What it does:**
+1. Checks ArgoCD is installed in argocd namespace
+2. Checks cluster-vars ConfigMap exists
+3. Checks CMP plugin (argocd-cmp-kustomize-envsubst) exists
+4. Applies k8s/argocd/root-app.yaml via kubectl apply
+5. Waits for root app to be created
+6. Displays all applications synced by root app
+7. Monitors ingress-nginx and longhorn (wave 0-1) sync progress
+8. Displays created namespaces
+9. Shows sync status and next steps
+
+**Secrets file format:**
+```yaml
+secrets:
+  - name: database-credentials
+    namespace: postgres
+    data:
+      username: postgres
+      password: securepassword
+  - name: api-keys
+    namespace: default
+    data:
+      github_token: ghp_xxxx
+      api_key: xxxxx
+```
+
+**Configure cluster variables via CLI (optional):**
+```bash
+ansible-playbook -i ansible/inventory.ini ansible/apply-secrets.yml \
+  -e "nas_ip=172.20.20.2" \
+  -e "timezone=America/New_York" \
+  -e "github_repo=https://github.com/user/homelab-gitops"
+```
+
+**Or via group_vars/all.yml:**
+```yaml
+nas_ip: "172.20.20.2"
+timezone: "UTC"
+github_repo: "https://github.com/user/homelab-gitops"
+```
+
+**Default values:**
+- Domain: `in.alybadawy.com` (set in playbook)
+- NAS IP: `172.20.20.2`
+- Timezone: `UTC`
+
+**Run:**
+```bash
+ansible-playbook -i ansible/inventory.ini ansible/apply-secrets.yml
+```
+
+**What it does:**
+1. Validates secrets file exists at `/mnt/nas/homelab/secrets.yaml`
+2. Extracts unique namespaces from secrets definition
+3. Creates all required namespaces
+4. Generates Kubernetes Secret manifests with base64-encoded data
+5. Applies secrets via kubectl
+6. Creates cluster-vars ConfigMap with:
+   - Domain and subdomain hostnames
+   - NAS configuration (IP, export paths)
+   - GitHub repository URL
+   - Timezone
+   - Service URLs for all applications (Grafana, Prometheus, Nextcloud, etc.)
+7. Displays verification of all created secrets and ConfigMaps
+
 ## Quick Start
 
 1. **Update the inventory** to match your server details:
@@ -298,9 +397,13 @@ When modifying playbooks:
 - [x] Swap file configuration
 - [x] NFS mounts configuration
 - [x] Kubernetes/k3s + Helm + Longhorn
-- [ ] nginx-ingress installation
-- [ ] Monitoring stack (Prometheus, Grafana)
-- [ ] Backup automation
+- [x] Longhorn backup discovery and restoration
+- [x] Kubernetes secrets and cluster configuration
+- [x] ArgoCD bootstrap (root application deployment)
+- [ ] nginx-ingress installation (via ArgoCD)
+- [ ] Monitoring stack (Prometheus, Grafana) (via ArgoCD)
+- [ ] Applications (Authentik, Nextcloud, Immich) (via ArgoCD)
+- [ ] Backup automation (via ArgoCD)
 - [ ] Container registry configuration
 - [ ] Network configuration
 
@@ -319,9 +422,64 @@ When modifying playbooks:
 - Verify `ansible_user` has sudo privileges
 - Test: `ssh homelab@172.20.20.3 "sudo whoami"`
 
+## GitOps Deployment Architecture
+
+The homelab uses **ArgoCD** for true GitOps deployment. All Kubernetes applications are declaratively defined in the `k8s/` directory and automatically synced to the cluster.
+
+**Key concepts:**
+- **Single source of truth:** The GitHub repository
+- **Automatic syncs:** Every git push triggers cluster updates
+- **Variable substitution:** Environment-specific values injected at sync time
+- **Drift detection:** Automatic reversion if cluster state diverges from git
+- **Sync waves:** Controlled deployment order (ingress → storage → databases → apps)
+
+**For detailed architecture documentation, see:** [GITOPS-ARCHITECTURE.md](GITOPS-ARCHITECTURE.md)
+
+### Quick GitOps Workflow
+
+```bash
+# 1. Apply secrets and configuration (Ansible)
+ansible-playbook -i ansible/inventory.ini ansible/apply-secrets.yml
+
+# 2. Deploy ArgoCD via Helm
+helm repo add argo https://argoproj.github.io/argo-helm
+helm repo update
+helm install argocd argo/argo-cd -n argocd --create-namespace \
+  -f k8s/argocd/helm-values.yaml
+
+# 3. Bootstrap all applications (Ansible)
+ansible-playbook -i ansible/inventory.ini ansible/argocd-bootstrap.yml
+
+# 4. Monitor sync progress
+argocd app list
+argocd app status db
+
+# 5. Access ArgoCD UI
+kubectl port-forward -n argocd svc/argocd-server 8080:443
+# Open: https://localhost:8080
+
+# 6. Update applications by committing to git
+git commit -am "Update app configuration"
+git push
+# ArgoCD automatically syncs within 3 minutes
+```
+
+---
+
 ## Contributing
 
-This is a personal homelab setup. For improvements or additions, test locally first and commit with clear commit messages.
+This is a personal homelab setup. For improvements or additions:
+1. Create a new branch
+2. Test changes locally (use `--dry-run` with Ansible)
+3. Commit with clear messages
+4. Push and let ArgoCD sync
+
+For new applications:
+1. Create stack directory: `k8s/stacks/myapp/`
+2. Define manifests with variable substitution (`${VAR}`)
+3. Create Application CRD: `k8s/argocd/apps/myapp.yaml`
+4. Register in: `k8s/argocd/apps/kustomization.yaml`
+5. Commit and push — ArgoCD syncs automatically
 
 ## License
 

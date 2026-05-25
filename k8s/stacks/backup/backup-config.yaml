@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-config
+  namespace: backup
+  labels:
+    homelab/stack: backup
+data:
+  # Full path on the host where k3s PVC backups are written.
+  # Substituted from cluster-vars by the kustomize-envsubst CMP at sync time.
+  BACKUPS_DIR: "${NAS_BACKUPS_DIR}"

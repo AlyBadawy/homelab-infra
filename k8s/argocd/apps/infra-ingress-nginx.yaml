@@ -1,0 +1,39 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: infra-ingress-nginx
+  namespace: argocd
+  labels:
+    homelab/stack: infrastructure
+  annotations:
+    # Wave 0: must be ready before other apps' Ingress resources work
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  sources:
+    # Helm chart from upstream repo
+    - repoURL: https://kubernetes.github.io/ingress-nginx
+      chart: ingress-nginx
+      targetRevision: "*"
+      helm:
+        releaseName: ingress-nginx
+        valueFiles:
+          - $values/k8s/infrastructure/ingress-nginx/helm-values.yaml
+        parameters:
+          # ${WILDCARD_SECRET} is substituted by the kustomize-envsubst CMP
+          # when the root app renders this Application manifest.
+          - name: controller.extraArgs.default-ssl-certificate
+            value: "ingress-nginx/${WILDCARD_SECRET}"
+    # Git repo as values source
+    - repoURL: ${GITHUB_REPO}
+      targetRevision: main
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ingress-nginx
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

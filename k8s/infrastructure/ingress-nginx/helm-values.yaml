@@ -1,0 +1,21 @@
+# ingress-nginx Helm values
+# ${WILDCARD_SECRET} is substituted at install time from CFG_DOMAIN.
+# The default-ssl-certificate points to the wildcard TLS secret created by
+# step 7 (install-tls), so individual Ingress resources don't need secretName.
+controller:
+  service:
+    type: LoadBalancer
+  # default-ssl-certificate is passed as helm.parameters in the ArgoCD Application
+  # so the ${WILDCARD_SECRET} placeholder is substituted by the CMP at render time.
+  config:
+    ssl-redirect: "true"
+    force-ssl-redirect: "true"
+    use-forwarded-headers: "true"
+    compute-full-forwarded-for: "true"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 90Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi

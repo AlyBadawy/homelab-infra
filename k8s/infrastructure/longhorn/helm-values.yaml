@@ -1,0 +1,36 @@
+# =============================================================================
+# k8s/infrastructure/longhorn/helm-values.yaml — Longhorn Helm chart values
+# =============================================================================
+# Single-replica setup for a homelab single-node k3s cluster.
+# Longhorn is NOT the default storage class — local-path remains default.
+# PVCs must explicitly set storageClassName: longhorn to use it.
+#
+# Backup target uses NFS so snapshots are exported to the NAS automatically.
+# The NFS export must exist on the NAS before Longhorn will go Ready.
+#   e.g. /var/nfs/shared/backups/k3s-longhorn (created by nas/setup scripts)
+# =============================================================================
+
+defaultSettings:
+  # Single node — no replication needed
+  defaultReplicaCount: 1
+  # Do NOT make Longhorn the default storage class
+  defaultDataLocality: best-effort
+  # backupTarget is passed as helm.parameters in the ArgoCD Application
+  # (nfs://<NAS_IP>:<NAS_BASE_EXPORT>/backups/k3s-longhorn).
+  # Replica auto-balance is irrelevant on single node, disable
+  replicaAutoBalance: "disabled"
+  # Allow scheduling on nodes with tags — none needed on single node
+  allowCollectingLonghornUsageMetrics: false
+
+persistence:
+  # local-path stays as the default storage class
+  defaultClass: false
+  defaultClassReplicaCount: 1
+
+ingress:
+  # Ingress is managed by our own ingress.yaml — not Helm's built-in one
+  enabled: false
+
+longhornUI:
+  # The UI pod itself still runs; ingress.yaml exposes it
+  replicas: 1

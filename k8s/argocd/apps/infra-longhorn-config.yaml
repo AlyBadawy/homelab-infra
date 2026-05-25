@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: infra-longhorn-config
+  namespace: argocd
+  labels:
+    homelab/stack: infrastructure
+  annotations:
+    # Wave 2: after Longhorn Helm is healthy (CRDs must exist before RecurringJobs)
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: ${GITHUB_REPO}
+    targetRevision: main
+    path: k8s/infrastructure/longhorn
+    plugin:
+      name: kustomize-envsubst
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: longhorn-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

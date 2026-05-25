@@ -1,0 +1,25 @@
+# =============================================================================
+# k8s/stacks/monitor/longhorn-pvcs.yaml — Longhorn migration targets
+# =============================================================================
+# The source PVC (prometheus-grafana) is owned by the kube-prometheus-stack
+# Helm release. We cannot add a shadow PVC to its template, so it lives here.
+# Applied explicitly in 10-apply-stacks.sh after Longhorn is ready.
+# The deployment switches to prometheus-grafana-lh in commit 3 (helm-values update).
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-grafana-lh
+  namespace: monitor
+  labels:
+    app.kubernetes.io/name: grafana
+    homelab/stack: monitor
+    homelab/storage: longhorn
+  annotations:
+    recurring-job-group.longhorn.io/default: enabled
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 2Gi

@@ -1,0 +1,54 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: infra-longhorn
+  namespace: argocd
+  labels:
+    homelab/stack: infrastructure
+  annotations:
+    # Wave 1: after ingress-nginx, before apps that need Longhorn PVCs to bind
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  sources:
+    - repoURL: https://charts.longhorn.io
+      chart: longhorn
+      targetRevision: "~1.7.0"
+      helm:
+        releaseName: longhorn
+        valueFiles:
+          - $values/k8s/infrastructure/longhorn/helm-values.yaml
+        parameters:
+          # ${NAS_IP} and ${NAS_BASE_EXPORT} substituted by CMP at render time
+          # NFSv3 + nolock: NAS does not support NFSv4; nolock skips rpc.statd (safe for backups)
+          - name: defaultSettings.backupTarget
+            value: "nfs://${NAS_IP}:${NAS_BASE_EXPORT}/backups/k3s-longhorn?nfsOptions=nfsvers%3D3%2Cnolock"
+    - repoURL: ${GITHUB_REPO}
+      targetRevision: main
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: longhorn-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+  # Longhorn self-modifies these resources at runtime after each sync.
+  # Ignoring them prevents the perpetual OutOfSync loop.
+  ignoreDifferences:
+    # Longhorn rewrites its own default settings ConfigMap at startup
+    - group: ""
+      kind: ConfigMap
+      name: longhorn-default-setting
+      namespace: longhorn-system
+      jsonPointers:
+        - /data
+    # CRD status is managed by Longhorn; preserveUnknownFields was removed in k8s 1.22+
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition
+      jsonPointers:
+        - /status
+        - /spec/preserveUnknownFields

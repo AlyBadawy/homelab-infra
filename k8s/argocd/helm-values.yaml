@@ -1,0 +1,52 @@
+# =============================================================================
+# ArgoCD Helm values
+# Helm chart: argo/argo-cd
+# Pin the image tag below to match your installed ArgoCD version.
+# =============================================================================
+
+configs:
+  params:
+    # Let ingress-nginx handle TLS — ArgoCD serves plain HTTP internally
+    server.insecure: "true"
+
+repoServer:
+  # Mount cluster-vars into the main repo-server container as well,
+  # so the CMP sidecar env is consistent with the host process env.
+  envFrom:
+    - configMapRef:
+        name: cluster-vars
+        optional: true
+
+  volumes:
+    - name: cmp-tmp
+      emptyDir: {}
+    - name: cmp-plugin
+      configMap:
+        name: argocd-cmp-kustomize-envsubst
+
+  # ── CMP sidecar: kustomize-envsubst ────────────────────────────────────────
+  # Uses the same ArgoCD image so kustomize and python3 are already available.
+  # Variable substitution is handled by an inline Python one-liner (no
+  # external envsubst binary needed — the ArgoCD UBI9 image doesn't ship one).
+  # Pin this tag to match the ArgoCD appVersion of the Helm chart you install.
+  extraContainers:
+    - name: kustomize-envsubst
+      image: quay.io/argoproj/argocd:v3.4.2
+      command: [/var/run/argocd/argocd-cmp-server]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+      envFrom:
+        - configMapRef:
+            name: cluster-vars
+            optional: true
+      volumeMounts:
+        - mountPath: /var/run/argocd
+          name: var-files
+        - mountPath: /home/argocd/cmp-server/plugins
+          name: plugins
+        - mountPath: /tmp
+          name: cmp-tmp
+        - mountPath: /home/argocd/cmp-server/config/plugin.yaml
+          subPath: plugin.yaml
+          name: cmp-plugin

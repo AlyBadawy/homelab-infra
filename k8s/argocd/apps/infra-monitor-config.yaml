@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: infra-monitor-config
+  namespace: argocd
+  labels:
+    homelab/stack: infrastructure
+  annotations:
+    # Wave 3: after kube-prometheus-stack is healthy (namespace must exist)
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  project: default
+  source:
+    repoURL: ${GITHUB_REPO}
+    targetRevision: main
+    path: k8s/stacks/monitor
+    plugin:
+      name: kustomize-envsubst
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitor
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Non-Helm Longhorn resources managed by ArgoCD (infra-longhorn-config app).
+# The Longhorn Helm chart itself is managed by the infra-longhorn app.
+resources:
+  - ingress.yaml
+  - recurring-jobs.yaml

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cmp-kustomize-envsubst
+  namespace: argocd
+data:
+  plugin.yaml: |
+    apiVersion: argoproj.io/v1alpha1
+    kind: ConfigManagementPlugin
+    metadata:
+      name: kustomize-envsubst
+    spec:
+      generate:
+        command: [sh, -c]
+        args:
+          - 'kustomize build . | awk ''{result=""; line=$0; while(match(line,/\$[{][A-Za-z_][A-Za-z0-9_]*[}]/)){v=substr(line,RSTART+2,RLENGTH-3); result=result substr(line,1,RSTART-1) ((v in ENVIRON)?ENVIRON[v]:substr(line,RSTART,RLENGTH)); line=substr(line,RSTART+RLENGTH)}; print result line}'''

@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: whoami
+  namespace: argocd
+  labels:
+    homelab/stack: whoami
+spec:
+  project: default
+  source:
+    repoURL: ${GITHUB_REPO}
+    targetRevision: main
+    path: k8s/stacks/whoami
+    plugin:
+      name: kustomize-envsubst
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: whoami
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

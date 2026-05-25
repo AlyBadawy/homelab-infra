@@ -1,0 +1,157 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-script
+  namespace: backup
+  labels:
+    homelab/stack: backup
+data:
+  backup.sh: |
+    #!/bin/sh
+    # ==========================================================================
+    # backup.sh — snapshot all PVC data to the NAS
+    # Runs inside a Kubernetes CronJob pod (alpine/k8s image).
+    # ==========================================================================
+    set -eu
+
+    NAS_HOST_PATH="/mnt/nas"
+    NAS_POD_PATH="/nas"
+
+    # ── Validate ──────────────────────────────────────────────────────────────
+    if [ -z "${BACKUPS_DIR:-}" ]; then
+      echo "ERROR: BACKUPS_DIR env var is not set (check backup-config ConfigMap)"
+      exit 1
+    fi
+
+    if [ ! -d "${NAS_POD_PATH}" ]; then
+      echo "ERROR: NAS not accessible at ${NAS_POD_PATH} — is it mounted on the host?"
+      exit 1
+    fi
+
+    # ── Setup ─────────────────────────────────────────────────────────────────
+    TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
+    SNAPSHOT_HOST="${BACKUPS_DIR}/k3s/${TIMESTAMP}"
+
+    # Convert host-side path to the in-container path used by sub-Jobs
+    # Host: /mnt/nas/...  →  Pod: /nas/...
+    SNAPSHOT_POD="${NAS_POD_PATH}/${SNAPSHOT_HOST#${NAS_HOST_PATH}/}"
+
+    echo ""
+    echo "======================================================================"
+    echo "  PVC Backup — ${TIMESTAMP}"
+    echo "  Target: ${SNAPSHOT_HOST}"
+    echo "======================================================================"
+    echo ""
+
+    mkdir -p "${SNAPSHOT_POD}"
+
+    # NOTE: This CronJob is suspended — Longhorn RecurringJobs handle backups now.
+    # PVC names updated to -lh variants for reference if re-enabled.
+
+    # ── Scale down workloads ──────────────────────────────────────────────────
+    echo "--- Scaling down workloads ---"
+    kubectl scale deployment postgres pgadmin      -n db    --replicas=0
+    kubectl scale deployment authentik-server      -n auth  --replicas=0
+    kubectl scale deployment authentik-worker      -n auth  --replicas=0
+    kubectl scale deployment nextcloud             -n cloud --replicas=0
+
+    echo "Waiting for pods to terminate..."
+    kubectl wait --for=delete pod --all -n db    --timeout=120s 2>/dev/null || true
+    kubectl wait --for=delete pod --all -n auth  --timeout=120s 2>/dev/null || true
+    kubectl wait --for=delete pod --all -n cloud --timeout=120s 2>/dev/null || true
+    echo "All target workloads stopped."
+    echo ""
+
+    # ── Backup helper ─────────────────────────────────────────────────────────
+    backup_pvc() {
+      NS="$1"
+      PVC="$2"
+      FILE="$3"
+      JOB="backup-${PVC}"
+
+      echo "--- ${NS}/${PVC} → ${FILE} ---"
+
+      # Clean up any leftover job from a previous interrupted run
+      kubectl delete job "${JOB}" -n "${NS}" --ignore-not-found >/dev/null 2>&1 || true
+
+      # Create the backup Job. The Job mounts the PVC read-only and writes a
+      # tar archive to the NAS via the /nas hostPath mount.
+      kubectl apply -f - <<EOF
+    apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: ${JOB}
+      namespace: ${NS}
+      labels:
+        homelab/backup: "true"
+    spec:
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 300
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: backup
+              image: alpine:3.19
+              command: ["/bin/sh", "-c"]
+              args:
+                - >-
+                  tar -czf ${SNAPSHOT_POD}/${FILE} -C /data .
+                  && echo "Archived: ${FILE}"
+                  && ls -lh ${SNAPSHOT_POD}/${FILE}
+              volumeMounts:
+                - name: pvc-data
+                  mountPath: /data
+                  readOnly: true
+                - name: nas
+                  mountPath: /nas
+              securityContext:
+                runAsUser: 0
+          volumes:
+            - name: pvc-data
+              persistentVolumeClaim:
+                claimName: ${PVC}
+            - name: nas
+              hostPath:
+                path: /mnt/nas
+                type: Directory
+    EOF
+
+      echo "Waiting for job ${JOB} (up to 10m)..."
+      if kubectl wait --for=condition=complete "job/${JOB}" -n "${NS}" --timeout=600s; then
+        echo "✓ ${NS}/${PVC} backed up"
+      else
+        echo "✗ Backup job failed: ${JOB}"
+        kubectl logs -n "${NS}" "job/${JOB}" 2>/dev/null || true
+        # Scale everything back up before exiting so services recover
+        kubectl scale deployment postgres pgadmin      -n db    --replicas=1 || true
+        kubectl scale deployment authentik-server     -n auth  --replicas=1 || true
+        kubectl scale deployment authentik-worker     -n auth  --replicas=1 || true
+        kubectl scale deployment nextcloud            -n cloud --replicas=1 || true
+        exit 1
+      fi
+      echo ""
+    }
+
+    # ── Run backups ───────────────────────────────────────────────────────────
+    backup_pvc db      postgres-data-lh        db_postgres-data.tar.gz
+    backup_pvc db      pgadmin-data-lh         db_pgadmin-data.tar.gz
+    backup_pvc auth    authentik-data-lh       auth_authentik-data.tar.gz
+    backup_pvc auth    authentik-templates-lh  auth_authentik-templates.tar.gz
+    backup_pvc cloud   nextcloud-data-lh       cloud_nextcloud-data.tar.gz
+    backup_pvc monitor prometheus-grafana-lh   monitor_prometheus-grafana.tar.gz
+
+    # ── Scale workloads back up ───────────────────────────────────────────────
+    echo "--- Scaling workloads back up ---"
+    kubectl scale deployment postgres pgadmin     -n db    --replicas=1
+    kubectl scale deployment authentik-server     -n auth  --replicas=1
+    kubectl scale deployment authentik-worker     -n auth  --replicas=1
+    kubectl scale deployment nextcloud            -n cloud --replicas=1
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    echo ""
+    echo "======================================================================"
+    echo "  Backup complete: ${SNAPSHOT_HOST}"
+    echo "======================================================================"
+    ls -lh "${SNAPSHOT_POD}"
+    echo ""

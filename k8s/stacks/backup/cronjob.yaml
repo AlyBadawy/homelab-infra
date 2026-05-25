@@ -1,0 +1,67 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pvc-backup
+  namespace: backup
+  labels:
+    homelab/stack: backup
+spec:
+  # Suspended: replaced by Longhorn RecurringJobs (commit 3).
+  # Remove this CronJob entirely in commit 4 once old local-path PVCs are gone.
+  suspend: true
+
+  schedule: "0 */6 * * *"
+
+  # Don't start a new run if the previous one is still going
+  concurrencyPolicy: Forbid
+
+  # Keep the last 3 successful and 3 failed job records for debugging
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+
+  jobTemplate:
+    spec:
+      # Give each backup up to 2 hours before timing out
+      activeDeadlineSeconds: 7200
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            homelab/stack: backup
+            homelab/job: pvc-backup
+        spec:
+          serviceAccountName: pvc-backup
+          restartPolicy: Never
+
+          containers:
+            - name: backup
+              # alpine/k8s ships kubectl + standard Alpine tools (sh, tar, date, mkdir, ls)
+              image: alpine/k8s:1.29.2
+              command: [sh, /backup/backup.sh]
+
+              # BACKUPS_DIR comes from backup-config ConfigMap
+              envFrom:
+                - configMapRef:
+                    name: backup-config
+
+              volumeMounts:
+                # The backup script
+                - name: script
+                  mountPath: /backup
+                  readOnly: true
+                # NAS — needed by this pod to create the timestamped snapshot dir
+                - name: nas
+                  mountPath: /nas
+
+              securityContext:
+                runAsUser: 0
+
+          volumes:
+            - name: script
+              configMap:
+                name: backup-script
+                defaultMode: 0755
+            - name: nas
+              hostPath:
+                path: /mnt/nas
+                type: Directory
