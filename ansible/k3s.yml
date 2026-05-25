@@ -86,61 +86,12 @@
       changed_when: false
 
     # ────────────────────────────────────────────────────────────────────────────
-    # Install Longhorn
+    # Longhorn Installation
     # ────────────────────────────────────────────────────────────────────────────
-    - name: Add Longhorn Helm repository
-      become: true
-      command: |
-        helm repo add longhorn https://charts.longhorn.io
-      environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-      changed_when: false
-
-    - name: Update Helm repositories
-      become: true
-      command: helm repo update
-      environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-      changed_when: false
-
-    - name: Create Longhorn namespace
-      become: true
-      shell: |
-        kubectl create namespace {{ longhorn_namespace }} --dry-run=client -o yaml | kubectl apply -f -
-      environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-      changed_when: false
-      failed_when: false
-
-    - name: Install Longhorn via Helm
-      become: true
-      shell: |
-        helm upgrade --install longhorn longhorn/longhorn \
-          --namespace {{ longhorn_namespace }} \
-          {% if longhorn_version %}--version {{ longhorn_version }}{% endif %}
-      environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-      register: longhorn_install
-      changed_when: "'deployed' in longhorn_install.stdout or 'upgraded' in longhorn_install.stdout"
-
-    - name: Wait for Longhorn pods to start
-      become: true
-      pause:
-        seconds: 15
-      changed_when: false
-
-    - name: Check Longhorn pods status
-      become: true
-      shell: |
-        kubectl get pods -n {{ longhorn_namespace }} -o wide
-      environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-      register: longhorn_pods
-      retries: 10
-      delay: 5
-      until: longhorn_pods.stdout is search('Running')
-      changed_when: false
-      failed_when: false
+    # NOTE: Longhorn is NOT installed here. It is managed by ArgoCD via the
+    # infra-longhorn Application (k8s/argocd/apps/infra-longhorn.yaml).
+    # This avoids conflicts when ArgoCD takes over Helm release management.
+    # Longhorn will be installed automatically when ArgoCD syncs.
 
     # ────────────────────────────────────────────────────────────────────────────
     # Verification
@@ -157,21 +108,14 @@
       debug:
         msg: "{{ k3s_nodes.stdout }}"
 
-    - name: Get Longhorn status
-      become: true
-      command: kubectl get all -n {{ longhorn_namespace }}
-      environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-      register: longhorn_status
-      changed_when: false
-
-    - name: Display Longhorn status
-      debug:
-        msg: "{{ longhorn_status.stdout_lines }}"
-
     - name: Summary
       debug:
         msg:
-          - "✓ k3s installed"
+          - "✓ k3s installed (without Traefik)"
           - "✓ Helm installed"
-          - "✓ Longhorn installed in namespace: {{ longhorn_namespace }}"
+          - "✓ Ready for ArgoCD deployment"
+          - ""
+          - "Next steps:"
+          - "1. Run: ansible-playbook -i ansible/inventory.ini ansible/apply-secrets.yml"
+          - "2. Run: ansible-playbook -i ansible/inventory.ini ansible/argocd-bootstrap.yml"
+          - "3. ArgoCD will install Longhorn via infra-longhorn Application"

@@ -188,9 +188,10 @@
     - name: Apply root application
       become: true
       shell: |
-        kubectl apply -f /tmp/root-app.yaml
+        cat /tmp/root-app.yaml | envsubst | kubectl apply -f -
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
+        GITHUB_REPO: "{{ github_repo.stdout }}"
       register: root_app_apply
       changed_when: "'created' in root_app_apply.stdout.lower()"
 
