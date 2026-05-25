@@ -337,6 +337,74 @@ ansible-playbook -i ansible/inventory.ini ansible/longhorn-backup-restore.yml
 7. Waits for volumes to be ready
 8. Displays final status and next steps
 
+### Database Restore Jobs (PostgreSQL & pgAdmin)
+
+For non-Longhorn volume restores or direct tar.gz backup restoration, two Kubernetes Jobs are available:
+
+**Files:**
+- `k8s/stacks/db/postgres-restore.yaml` — Restores PostgreSQL data
+- `k8s/stacks/db/pgadmin-restore.yaml` — Restores pgAdmin configuration
+
+**What they do:**
+- Mount the `postgres-data-lh` / `pgadmin-data-lh` PVCs
+- Mount `/mnt/nas/backups/backups-of-volumes/2026-05-21_06-56-57` from the NAS (read-only)
+- Extract tar.gz backup files directly into the PVC volumes
+- Complete as one-off jobs (no re-run unless manually triggered)
+
+**Usage:**
+
+These Jobs are picked up by ArgoCD when present in `k8s/stacks/db/`:
+
+```bash
+# Let ArgoCD sync the manifests
+kubectl get jobs -n db --watch
+
+# Monitor restore progress
+kubectl logs -n db job/postgres-restore -f
+kubectl logs -n db job/pgadmin-restore -f
+
+# Once complete and verified, remove the manifest files from the repo
+# (to prevent re-running on future syncs)
+git rm k8s/stacks/db/postgres-restore.yaml k8s/stacks/db/pgadmin-restore.yaml
+git commit -m "Remove completed restore jobs"
+git push
+```
+
+**Job behavior:**
+- `backoffLimit: 1` — fails immediately on error (no retries)
+- `ttlSecondsAfterFinished: 86400` — jobs auto-cleanup after 24 hours
+- `hostPath` volume mounts `/mnt/nas` (requires NAS mounted on node)
+- Alpine container with tar extraction
+
+**Restore workflow:**
+
+1. Verify backup files exist on NAS:
+   ```bash
+   ls -lah /mnt/nas/backups/backups-of-volumes/2026-05-21_06-56-57/
+   ```
+
+2. Add Job manifests to `k8s/stacks/db/` and push to git
+
+3. ArgoCD syncs and runs the Jobs
+
+4. Monitor:
+   ```bash
+   kubectl get jobs -n db
+   kubectl logs -n db job/postgres-restore -f
+   ```
+
+5. Once restored and verified, delete the Job manifests from the repo:
+   ```bash
+   git rm k8s/stacks/db/postgres-restore.yaml k8s/stacks/db/pgadmin-restore.yaml
+   git commit -m "Cleanup: completed database restores"
+   git push
+   ```
+
+**Differences from Longhorn restore:**
+- **Longhorn volumes:** Full snapshot restore via Longhorn API
+- **Database Jobs:** Direct tar.gz extraction into PVCs
+- **Use Jobs when:** You have tar.gz backups from external sources (not Longhorn snapshots)
+
 ### acme-cert.yml
 
 Generates a wildcard TLS certificate for your domain via Let's Encrypt using ACME.sh:
