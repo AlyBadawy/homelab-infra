@@ -12,6 +12,7 @@
       - gettext-base
       - open-iscsi
       - jq
+      - cron
 
   tasks:
     - name: Update apt cache

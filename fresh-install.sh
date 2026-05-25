@@ -145,10 +145,14 @@ main() {
     read -p "Enter GitHub repository URL [https://github.com/AlyBadawy/homelab-infra]: " GITHUB_REPO
     GITHUB_REPO="${GITHUB_REPO:-https://github.com/AlyBadawy/homelab-infra}"
 
+    read -p "Enter email for ACME certificate [admin@in.alybadawy.com]: " ACME_EMAIL
+    ACME_EMAIL="${ACME_EMAIL:-admin@in.alybadawy.com}"
+
     echo ""
     print_header "Configuration Summary"
     echo "GitHub Repo: $GITHUB_REPO"
     echo "Vercel Token: ${VERCEL_TOKEN:0:10}***"
+    echo "ACME Email: $ACME_EMAIL"
     echo ""
 
     read -p "Proceed with these settings? (y/n) " -n 1 -r
@@ -207,7 +211,7 @@ main() {
     fi
 
     # 6. ACME Certificate
-    if run_playbook "acme-cert.yml" "TLS Certificate via Vercel" "-e vercel_api_token=$VERCEL_TOKEN"; then
+    if run_playbook "acme-cert.yml" "TLS Certificate via Vercel" "-e \"vercel_api_token=$VERCEL_TOKEN acme_email=$ACME_EMAIL\""; then
         COMPLETED_PLAYBOOKS+=("acme-cert.yml")
     else
         FAILED_PLAYBOOKS+=("acme-cert.yml")

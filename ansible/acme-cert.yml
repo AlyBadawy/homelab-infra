@@ -4,9 +4,29 @@
   vars:
     kubeconfig_path: "/etc/rancher/k3s/k3s.yaml"
     domain: "in.alybadawy.com"
-    acme_home: "/root/.acme.sh"
+    acme_home: "{{ ansible_env.HOME }}/.acme.sh"
+    acme_conf: "{{ acme_home }}/account.conf"
     cert_secret_name: "wildcard-in-alybadawy-com"
     ingress_namespace: "ingress-nginx"
+    nas_certs_dir: "/mnt/nas/homelab/certs"
+    vercel_api_token: "{{ vercel_api_token | default('') }}"
+    acme_email: "{{ acme_email | default('admin@in.alybadawy.com') }}"
+
+  pre_tasks:
+    - name: Validate Vercel API token
+      fail:
+        msg: "Vercel API token is required. Pass it with: -e 'vercel_api_token=YOUR_TOKEN'"
+      when: vercel_api_token == '' or vercel_api_token is undefined
+
+    - name: Display ACME email
+      debug:
+        msg: "ACME certificate will be issued to: {{ acme_email }}"
+
+    - name: Create NAS certs directory
+      file:
+        path: "{{ nas_certs_dir }}"
+        state: directory
+        mode: "0755"
 
   tasks:
     # ────────────────────────────────────────────────────────────────────────────
@@ -17,69 +37,208 @@
         path: "{{ acme_home }}/acme.sh"
       register: acme_installed
 
-    - name: Install ACME.sh
-      become: true
-      shell: |
-        curl https://get.acme.sh | sh -s email=admin@{{ domain }}
+    - name: Install ACME.sh (if not already installed)
+      block:
+        - name: Download and install ACME.sh
+          shell: |
+            curl -fsSL https://get.acme.sh | sh -s "email={{ acme_email }}" || true
+          register: acme_install
+          changed_when: false
+
+        - name: Wait for installation to complete
+          wait_for:
+            path: "{{ acme_home }}/acme.sh"
+            state: present
+            timeout: 10
+          register: acme_wait
+          failed_when: false
+
+        - name: Check if binary exists
+          stat:
+            path: "{{ acme_home }}/acme.sh"
+          register: acme_binary_check
+
+        - name: Verify installation succeeded
+          fail:
+            msg: |
+              ACME.sh installation failed. Binary not found at {{ acme_home }}/acme.sh
+              Please ensure curl is installed and the {{ acme_home }} directory is writable.
+          when: not acme_binary_check.stat.exists
+
+        - name: Make binary executable
+          file:
+            path: "{{ acme_home }}/acme.sh"
+            mode: "0755"
+
       when: not acme_installed.stat.exists
-      register: acme_install
 
-    - name: Display ACME.sh installation result
-      debug:
-        msg: "{{ acme_install.stdout_lines }}"
-      when: acme_install is changed
-
-    # ────────────────────────────────────────────────────────────────────────────
-    # Request wildcard certificate from Let's Encrypt via Vercel DNS
-    # ────────────────────────────────────────────────────────────────────────────
-    - name: Request wildcard certificate
-      become: true
+    - name: Verify ACME.sh installation
       shell: |
-        export Vercel_Token="{{ vercel_api_token }}"
+        {{ acme_home }}/acme.sh --version
+      register: acme_version
+      changed_when: false
+      failed_when: false
+
+    - name: Display ACME.sh version
+      debug:
+        msg: "ACME.sh installed: {{ acme_version.stdout }}"
+      when: acme_version.rc == 0
+
+    - name: Debug ACME.sh installation
+      debug:
+        msg: |
+          ACME.sh installation check:
+          - File exists: {{ acme_installed.stat.exists }}
+          - Command result: {{ acme_version.rc }}
+          - Expected path: {{ acme_home }}/acme.sh
+      when: acme_version.rc != 0
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Persist Vercel token for auto-renewal cron
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Create ACME.sh config directory
+      file:
+        path: "{{ acme_home }}"
+        state: directory
+        mode: "0700"
+
+    - name: Remove stale Vercel token entries from account.conf
+      lineinfile:
+        path: "{{ acme_conf }}"
+        regexp: "^(VERCEL_TOKEN|SAVED_VERCEL_TOKEN)="
+        state: absent
+        create: yes
+
+    - name: Write Vercel token to account.conf (for cron-based renewals)
+      lineinfile:
+        path: "{{ acme_conf }}"
+        line: "{{ item }}"
+        create: yes
+        mode: "0600"
+      loop:
+        - "VERCEL_TOKEN='{{ vercel_api_token }}'"
+        - "SAVED_VERCEL_TOKEN='{{ vercel_api_token }}'"
+      no_log: true
+
+    - name: Display token persisted
+      debug:
+        msg: "Vercel token written to {{ acme_conf }} for auto-renewal"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Check for existing valid certificate
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Check existing certificate validity
+      block:
+        - name: Check if cert files exist on NAS
+          stat:
+            path: "{{ nas_certs_dir }}/fullchain.pem"
+          register: cert_file
+
+        - name: Get certificate expiry date
+          shell: |
+            openssl x509 -enddate -noout -in "{{ nas_certs_dir }}/fullchain.pem" | cut -d= -f2
+          register: cert_expiry
+          changed_when: false
+          when: cert_file.stat.exists
+
+        - name: Calculate days until expiry
+          shell: |
+            expiry_epoch=$(date -d "{{ cert_expiry.stdout }}" +%s)
+            now_epoch=$(date +%s)
+            days_left=$(( (expiry_epoch - now_epoch) / 86400 ))
+            echo $days_left
+          register: days_left
+          changed_when: false
+          when: cert_expiry.stdout is defined
+
+        - name: Set cert validity flag
+          set_fact:
+            cert_valid: "{{ (days_left.stdout | int) > 30 }}"
+            days_remaining: "{{ days_left.stdout | int }}"
+          when: days_left.stdout is defined
+
+        - name: Display existing cert status
+          debug:
+            msg: "Certificate valid with {{ days_remaining }} days remaining"
+          when: cert_valid | default(false)
+
+      rescue:
+        - name: No valid cert found
+          set_fact:
+            cert_valid: false
+            days_remaining: 0
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Issue or re-register certificate
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Check if acme.sh is already configured for this domain
+      stat:
+        path: "{{ acme_home }}/wildcard_{{ domain }}"
+      register: acme_domain_dir
+
+    - name: Determine if re-issuance is needed
+      set_fact:
+        need_issuance: "{{ not cert_valid | default(false) or not acme_domain_dir.stat.exists }}"
+
+    - name: Issue wildcard certificate
+      shell: |
+        export VERCEL_TOKEN="{{ vercel_api_token }}"
         {{ acme_home }}/acme.sh --issue \
-          -d "{{ domain }}" \
-          -d "*.{{ domain }}" \
           --dns dns_vercel \
-          --dnssleep 10 \
-          --force
+          --domain "*.{{ domain }}" \
+          --domain "{{ domain }}" \
+          --server letsencrypt
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
       register: acme_issue
-      changed_when: "'Cert success' in acme_issue.stdout or 'Cert skipped' in acme_issue.stdout"
+      when: need_issuance
+      failed_when: acme_issue.rc not in [0, 2]
+      changed_when: "'Cert success' in acme_issue.stdout"
 
-    - name: Display certificate request result
+    - name: Display certificate issuance result
       debug:
         msg: "{{ acme_issue.stdout_lines }}"
+      when: acme_issue is defined and acme_issue.stdout_lines is defined
 
     # ────────────────────────────────────────────────────────────────────────────
-    # Locate certificate files
+    # Install cert with renewal hook (deploy hook to NAS)
     # ────────────────────────────────────────────────────────────────────────────
-    - name: Find certificate location
-      become: true
-      find:
-        paths: "{{ acme_home }}"
-        patterns: "fullchain.cer"
-        recurse: yes
-      register: cert_fullchain
+    - name: Install certificate with deploy hook to NAS
+      shell: |
+        {{ acme_home }}/acme.sh --install-cert \
+          --domain "*.{{ domain }}" \
+          --cert-file "{{ nas_certs_dir }}/cert.pem" \
+          --key-file "{{ nas_certs_dir }}/privkey.pem" \
+          --fullchain-file "{{ nas_certs_dir }}/fullchain.pem" \
+          --reloadcmd "echo 'Renewal hook: Certificate renewed for *.{{ domain }}'"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: cert_install
+      changed_when: "'success' in cert_install.stdout.lower()"
 
-    - name: Find key location
-      become: true
-      find:
-        paths: "{{ acme_home }}"
-        patterns: "*.key"
-        recurse: yes
-      register: cert_key
+    - name: Display certificate installation result
+      debug:
+        msg: "{{ cert_install.stdout_lines }}"
+      when: cert_install.stdout_lines is defined
 
-    - name: Set certificate paths
-      set_fact:
-        cert_fullchain_path: "{{ cert_fullchain.files[0].path if cert_fullchain.files else '' }}"
-        cert_key_path: "{{ cert_key.files | selectattr('path', 'match', '.*/' + domain + '/') | map(attribute='path') | first if (cert_key.files | selectattr('path', 'match', '.*/' + domain + '/') | list) else '' }}"
+    # ────────────────────────────────────────────────────────────────────────────
+    # Verify certificate files exist on NAS
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Verify NAS certificate files
+      stat:
+        path: "{{ nas_certs_dir }}/{{ item }}"
+      register: nas_cert_check
+      failed_when: not nas_cert_check.stat.exists
+      loop:
+        - "fullchain.pem"
+        - "privkey.pem"
 
-    - name: Display certificate paths
+    - name: Display NAS certificate location
       debug:
         msg:
-          - "Certificate: {{ cert_fullchain_path }}"
-          - "Key: {{ cert_key_path }}"
+          - "Certificates persisted to NAS: {{ nas_certs_dir }}"
+          - "- fullchain.pem (certificate)"
+          - "- privkey.pem (private key)"
 
     # ────────────────────────────────────────────────────────────────────────────
     # Create ingress-nginx namespace if needed
@@ -107,8 +266,8 @@
       become: true
       shell: |
         kubectl create secret tls {{ cert_secret_name }} \
-          --cert="{{ cert_fullchain_path }}" \
-          --key="{{ cert_key_path }}" \
+          --cert="{{ nas_certs_dir }}/fullchain.pem" \
+          --key="{{ nas_certs_dir }}/privkey.pem" \
           -n {{ ingress_namespace }}
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
@@ -133,7 +292,13 @@
 
     - name: Display secret details
       debug:
-        msg: "{{ secret_verify.stdout_lines | head(20) }}"
+        msg: "{{ secret_verify.stdout_lines[:20] }}"
+
+    - name: Verify certificate expiry
+      shell: |
+        openssl x509 -enddate -noout -in "{{ nas_certs_dir }}/fullchain.pem"
+      register: cert_expiry_final
+      changed_when: false
 
     # ────────────────────────────────────────────────────────────────────────────
     # Summary
@@ -147,14 +312,39 @@
 
           ✓ Domain: {{ domain }}
           ✓ Wildcard: *.{{ domain }}
-          ✓ Certificate: {{ cert_fullchain_path }}
-          ✓ Private Key: {{ cert_key_path }}
-          ✓ Secret: {{ cert_secret_name }} ({{ ingress_namespace }} namespace)
+          ✓ Certificate: {{ nas_certs_dir }}/fullchain.pem
+          ✓ Private Key: {{ nas_certs_dir }}/privkey.pem
+          ✓ Kubernetes Secret: {{ cert_secret_name }} ({{ ingress_namespace }} namespace)
 
           Certificate Details:
           - Issuer: Let's Encrypt
           - Validation: Vercel DNS (DNS-01)
-          - Auto-renewal: Configured via ACME.sh
+          - Expiry: {{ cert_expiry_final.stdout }}
+          - NAS Backup: {{ nas_certs_dir }}
+
+          Auto-Renewal Configuration:
+          ✓ Vercel token persisted to: {{ acme_conf }}
+          ✓ Deploy hook registered (renewal → NAS)
+          ✓ ACME.sh cron configured for auto-renewal
+          → Certificate will auto-renew 30 days before expiry
+          → Renewed cert automatically copied to {{ nas_certs_dir }}
+          → Kubernetes secret must be updated manually on renewal
+
+          How Auto-Renewal Works:
+          1. ACME.sh cron job runs 2 times daily
+          2. If cert expires in <30 days, renewal begins
+          3. Vercel DNS-01 validation occurs (using token from account.conf)
+          4. On success, deploy hook updates {{ nas_certs_dir }}
+          5. Manually re-run acme-cert.yml to update K8s secret:
+             ansible-playbook -i ansible/inventory.ini ansible/acme-cert.yml \
+               -e "vercel_api_token=YOUR_TOKEN"
+
+          To Manual Renew Now:
+          ~/.acme.sh/acme.sh --renew -d "*.{{ domain }}" --dns dns_vercel
+
+          To Check Renewal Status:
+          ~/.acme.sh/acme.sh --list
+          ~/.acme.sh/acme.sh --info -d "*.{{ domain }}"
 
           Next Steps:
           1. Run: ansible-playbook -i ansible/inventory.ini ansible/argocd-bootstrap.yml
@@ -165,9 +355,5 @@
           - https://argocd.in.alybadawy.com (ArgoCD UI)
           - https://grafana.in.alybadawy.com (Grafana, if deployed)
           - https://any-service.in.alybadawy.com (Any service)
-
-          Cert Renewal:
-          ACME.sh automatically renews 30 days before expiration.
-          Manual renewal: acme.sh --renew -d *.{{ domain }} --dns dns_vercel
 
           ═══════════════════════════════════════════════════════════════

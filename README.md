@@ -126,19 +126,18 @@ ansible-playbook -i ansible/inventory.ini ansible/nfs-mounts.yml
 ```
 
 ### k3s.yml
-Installs k3s Kubernetes, Helm, and Longhorn storage:
-- Installs k3s **without Traefik** (nginx-ingress to be added later)
+Installs k3s Kubernetes and Helm package manager:
+- Installs k3s **without Traefik** (nginx-ingress to be added later via ArgoCD)
 - Installs Helm package manager
-- Installs Longhorn distributed storage (ready for persistent volumes)
-- Configures everything but no PVCs are created yet
+- **Does NOT install Longhorn** — managed entirely by ArgoCD (prevents Helm conflicts)
 - Saves kubeconfig to your local machine
+- Ready for ArgoCD to take over infrastructure management
 
 **Versions (customizable):**
 ```yaml
 vars:
   k3s_version: ""              # Leave empty for latest
   helm_version: ""
-  longhorn_version: ""
 ```
 
 **Run:**
@@ -153,11 +152,10 @@ export KUBECONFIG=~/.kube/k3s-config.yaml
 
 # Verify cluster
 kubectl get nodes
-
-# Access Longhorn UI (if needed)
-kubectl port-forward -n longhorn-system svc/longhorn-frontend 8080:80
-# Then visit http://localhost:8080
 ```
+
+**Why Longhorn isn't installed here:**
+Longhorn is installed by ArgoCD via the `infra-longhorn` Application (see `k8s/argocd/apps/`). This avoids Helm state conflicts and establishes a single source of truth (git) for Longhorn configuration.
 
 ### longhorn-restore.yml
 Discovers Longhorn volume backups and provides guided restore instructions:
@@ -236,6 +234,99 @@ ansible-playbook -i ansible/inventory.ini ansible/longhorn-backup-restore.yml
 6. Creates PersistentVolumeClaims for each restored volume
 7. Waits for volumes to be ready
 8. Displays final status and next steps
+
+### acme-cert.yml
+Generates a wildcard TLS certificate for your domain via Let's Encrypt using ACME.sh:
+- Installs ACME.sh to your user home directory (`~/.acme.sh`)
+- Uses Vercel DNS-01 validation (requires Vercel API token)
+- Generates wildcard certificate for `*.{{ domain }}` and `{{ domain }}`
+- Creates Kubernetes TLS secret in the `ingress-nginx` namespace
+- Configures auto-renewal (30 days before expiration)
+- **Required before deploying ingress-nginx** to serve HTTPS traffic
+
+**Prerequisites:**
+- Domain must be using Vercel's DNS service
+- Vercel API token (personal access token from Vercel dashboard)
+
+**Configuration:**
+```yaml
+vars:
+  domain: "in.alybadawy.com"              # Your domain
+  acme_email: "admin@in.alybadawy.com"    # Email for ACME notifications
+  cert_secret_name: "wildcard-in-alybadawy-com"  # K8s secret name
+```
+
+**Run:**
+```bash
+ansible-playbook -i ansible/inventory.ini ansible/acme-cert.yml \
+  -e "vercel_api_token=YOUR_VERCEL_TOKEN"
+```
+
+**Optional: custom email**
+```bash
+ansible-playbook -i ansible/inventory.ini ansible/acme-cert.yml \
+  -e "vercel_api_token=YOUR_TOKEN" \
+  -e "acme_email=youremail@example.com"
+```
+
+**What it does:**
+1. Validates Vercel API token is provided
+2. Creates NAS certs directory (`/mnt/nas/homelab/certs`)
+3. Installs ACME.sh (if not already installed)
+4. Persists Vercel token to `~/.acme.sh/account.conf` for auto-renewal cron
+5. Checks for existing valid certificate (>30 days remaining)
+6. Requests wildcard certificate from Let's Encrypt via Vercel DNS validation (if needed)
+7. Installs certificate with **renewal deploy hook** to NAS
+8. Creates Kubernetes TLS secret from certificate files
+9. Verifies both NAS and Kubernetes secret creation
+
+**Certificate Storage:**
+- **NAS:** `/mnt/nas/homelab/certs/` (persistent, survives fresh installs)
+- **Kubernetes:** `ingress-nginx/wildcard-in-alybadawy-com` secret
+- **ACME.sh:** `~/.acme.sh/wildcard_in.alybadawy.com/` (registration + renewal config)
+
+**Auto-Renewal Workflow:**
+1. ACME.sh cron runs twice daily
+2. If cert expires in <30 days, renewal begins
+3. Vercel DNS-01 validation using token from `account.conf`
+4. On success, deploy hook automatically copies renewed cert to NAS
+5. **Note:** Kubernetes secret requires manual update on renewal (re-run this playbook)
+
+```bash
+# Re-run after renewal to update K8s secret
+ansible-playbook -i ansible/inventory.ini ansible/acme-cert.yml \
+  -e "vercel_api_token=YOUR_TOKEN"
+```
+
+**Verify certificate:**
+```bash
+# Check NAS certificate
+openssl x509 -enddate -noout -in /mnt/nas/homelab/certs/fullchain.pem
+
+# Check Kubernetes secret exists
+kubectl get secret wildcard-in-alybadawy-com -n ingress-nginx
+
+# View certificate details
+kubectl get secret wildcard-in-alybadawy-com -n ingress-nginx \
+  -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -text -noout
+```
+
+**Check renewal status:**
+```bash
+~/.acme.sh/acme.sh --list
+~/.acme.sh/acme.sh --info -d "*.in.alybadawy.com"
+```
+
+**Manual renewal:**
+```bash
+~/.acme.sh/acme.sh --renew -d "in.alybadawy.com" \
+  -d "*.in.alybadawy.com" --dns dns_vercel
+```
+
+**View auto-renewal logs:**
+```bash
+~/.acme.sh/acme.sh --cron --debug
+```
 
 ### apply-secrets.yml
 Applies Kubernetes secrets and cluster configuration from NAS:
@@ -338,6 +429,16 @@ ansible-playbook -i ansible/inventory.ini ansible/apply-secrets.yml
 
 ## Quick Start
 
+**Recommended: Run the automated fresh install script**
+```bash
+chmod +x fresh-install.sh
+./fresh-install.sh
+```
+
+This will guide you through the entire deployment process with interactive prompts.
+
+**Manual step-by-step:**
+
 1. **Update the inventory** to match your server details:
    ```bash
    nano ansible/inventory.ini
@@ -348,9 +449,24 @@ ansible-playbook -i ansible/inventory.ini ansible/apply-secrets.yml
    ansible all -i ansible/inventory.ini -m ping
    ```
 
-3. **Run the bootstrap playbook**:
+3. **Run playbooks in order:**
    ```bash
+   # System setup (bootstrap, dependencies, swap, NFS)
    ansible-playbook -i ansible/inventory.ini ansible/bootstrap.yml
+   ansible-playbook -i ansible/inventory.ini ansible/dependencies.yml
+   ansible-playbook -i ansible/inventory.ini ansible/swap.yml
+   ansible-playbook -i ansible/inventory.ini ansible/nfs-mounts.yml
+   
+   # Kubernetes setup
+   ansible-playbook -i ansible/inventory.ini ansible/k3s.yml
+   
+   # TLS certificate (required for ingress)
+   ansible-playbook -i ansible/inventory.ini ansible/acme-cert.yml \
+     -e "vercel_api_token=YOUR_TOKEN"
+   
+   # Kubernetes secrets and ArgoCD
+   ansible-playbook -i ansible/inventory.ini ansible/apply-secrets.yml
+   ansible-playbook -i ansible/inventory.ini ansible/argocd-bootstrap.yml
    ```
 
 ## SSH Key Setup (Optional but Recommended)
@@ -390,22 +506,117 @@ When modifying playbooks:
    git commit -m "description of changes"
    ```
 
+## Automated Fresh Install
+
+The `fresh-install.sh` script automates the entire deployment process by running all playbooks in the correct order:
+
+```bash
+./fresh-install.sh
+```
+
+**What it does:**
+1. **Validates requirements:** Checks for ansible-playbook, ssh, inventory.ini
+2. **Tests SSH connectivity:** Verifies you can reach all servers
+3. **Prompts for configuration:** Requests Vercel token, GitHub repo, ACME email
+4. **Displays summary:** Shows configuration before proceeding
+5. **Runs playbooks in order:**
+   - `bootstrap.yml` - System updates
+   - `dependencies.yml` - Required packages
+   - `swap.yml` - 12GB swap file
+   - `nfs-mounts.yml` - NAS mounts
+   - `k3s.yml` - Kubernetes + Helm
+   - `acme-cert.yml` - TLS certificate
+   - `apply-secrets.yml` - Kubernetes secrets & config
+   - `argocd-bootstrap.yml` - GitOps deployment
+   - `restore-longhorn-volumes.yml` - **(optional)** Restore backups
+
+6. **Tracks progress:** Shows completed vs. failed playbooks
+7. **Provides next steps:** kubectl commands for monitoring
+
+**Setup (first time):**
+```bash
+# Make script executable
+chmod +x fresh-install.sh
+
+# Ensure inventory is configured
+nano ansible/inventory.ini
+
+# Test SSH connectivity
+ansible all -i ansible/inventory.ini -m ping
+```
+
+**Run the fresh install:**
+```bash
+./fresh-install.sh
+```
+
+**You will be prompted for:**
+```
+Enter your Vercel API token: [YOUR_TOKEN]
+Enter GitHub repository URL [https://github.com/AlyBadawy/homelab-infra]: 
+Enter email for ACME certificate [admin@in.alybadawy.com]: 
+```
+
+**Progress tracking:**
+The script will confirm before running each playbook:
+```
+════════════════════════════════════════════════════════════════
+Running: System Bootstrap (apt update/upgrade)
+Playbook: bootstrap.yml
+Continue? (y/n)
+```
+
+**If something fails:**
+The script tracks which playbooks completed and which failed. Fix the issue and re-run:
+```bash
+# Re-run just the failed playbook
+ansible-playbook -i ansible/inventory.ini ansible/FAILED_PLAYBOOK.yml
+
+# Or restart the full script
+./fresh-install.sh
+```
+
+**After completion:**
+The script displays:
+- List of successfully completed playbooks
+- List of any failed playbooks
+- Next steps for monitoring ArgoCD deployment
+
+**Monitor deployment:**
+```bash
+# Watch applications sync
+watch kubectl get applications -n argocd
+
+# Check root application status
+kubectl get application root -n argocd -o wide
+
+# Monitor all pods
+kubectl get pods -A --watch
+```
+
 ## Playbook Checklist
 
+### Infrastructure Provisioning (Ansible)
 - [x] System bootstrap (apt update/upgrade)
 - [x] System dependencies (packages, NTP, iSCSI)
-- [x] Swap file configuration
+- [x] Swap file configuration (12GB)
 - [x] NFS mounts configuration
-- [x] Kubernetes/k3s + Helm + Longhorn
-- [x] Longhorn backup discovery and restoration
+- [x] Kubernetes/k3s + Helm (Longhorn managed by ArgoCD)
+- [x] TLS certificate generation (ACME.sh + Vercel DNS)
 - [x] Kubernetes secrets and cluster configuration
 - [x] ArgoCD bootstrap (root application deployment)
-- [ ] nginx-ingress installation (via ArgoCD)
-- [ ] Monitoring stack (Prometheus, Grafana) (via ArgoCD)
-- [ ] Applications (Authentik, Nextcloud, Immich) (via ArgoCD)
+- [x] Longhorn backup discovery and restoration
+- [x] **Fresh install automation script** (fresh-install.sh)
+
+### Infrastructure Components (via ArgoCD)
+- [x] nginx-ingress (ingress-nginx, wave 0)
+- [x] Longhorn storage (infra-longhorn, wave 0)
+- [ ] Monitoring stack (Prometheus, Grafana) (via ArgoCD, wave 1)
+- [ ] Databases (PostgreSQL, Redis) (via ArgoCD, wave 1)
+- [ ] Applications (Authentik, Nextcloud, Immich, etc.) (via ArgoCD, wave 2+)
 - [ ] Backup automation (via ArgoCD)
-- [ ] Container registry configuration
-- [ ] Network configuration
+- [ ] Container registry configuration (optional)
+- [ ] Network policies and security (optional)
 
 ## Troubleshooting
 
@@ -437,28 +648,44 @@ The homelab uses **ArgoCD** for true GitOps deployment. All Kubernetes applicati
 
 ### Quick GitOps Workflow
 
+**Recommended: Use `fresh-install.sh` for automated deployment**
 ```bash
-# 1. Apply secrets and configuration (Ansible)
+chmod +x fresh-install.sh
+./fresh-install.sh
+```
+
+**Manual workflow (if not using script):**
+```bash
+# 1. Bootstrap system
+ansible-playbook -i ansible/inventory.ini ansible/bootstrap.yml
+ansible-playbook -i ansible/inventory.ini ansible/dependencies.yml
+ansible-playbook -i ansible/inventory.ini ansible/swap.yml
+ansible-playbook -i ansible/inventory.ini ansible/nfs-mounts.yml
+
+# 2. Install k3s and Helm
+ansible-playbook -i ansible/inventory.ini ansible/k3s.yml
+
+# 3. Generate TLS certificate (required for ingress)
+ansible-playbook -i ansible/inventory.ini ansible/acme-cert.yml \
+  -e "vercel_api_token=YOUR_TOKEN"
+
+# 4. Apply secrets and cluster configuration
 ansible-playbook -i ansible/inventory.ini ansible/apply-secrets.yml
 
-# 2. Deploy ArgoCD via Helm
-helm repo add argo https://argoproj.github.io/argo-helm
-helm repo update
-helm install argocd argo/argo-cd -n argocd --create-namespace \
-  -f k8s/argocd/helm-values.yaml
-
-# 3. Bootstrap all applications (Ansible)
+# 5. Bootstrap ArgoCD and all applications
 ansible-playbook -i ansible/inventory.ini ansible/argocd-bootstrap.yml
 
-# 4. Monitor sync progress
-argocd app list
-argocd app status db
+# 6. (Optional) Restore Longhorn volumes from backups
+ansible-playbook -i ansible/inventory.ini ansible/restore-longhorn-volumes.yml
 
-# 5. Access ArgoCD UI
+# 7. Monitor sync progress
+watch kubectl get applications -n argocd
+
+# 8. Access ArgoCD UI
 kubectl port-forward -n argocd svc/argocd-server 8080:443
 # Open: https://localhost:8080
 
-# 6. Update applications by committing to git
+# 9. Update applications by committing to git
 git commit -am "Update app configuration"
 git push
 # ArgoCD automatically syncs within 3 minutes
