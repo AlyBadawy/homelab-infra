@@ -1,0 +1,68 @@
+# =============================================================================
+# Authentik Templates Restore Job — One-time restore from backup
+# =============================================================================
+# Restores authentik-templates-lh PVC from:
+# /mnt/nas/backups/backups-of-volumes/2026-05-21_06-56-57/authentik_templates.tar.gz
+#
+# USAGE:
+# 1. Ensure backup file exists on NAS
+# 2. Let ArgoCD sync this manifest
+# 3. Monitor job: kubectl logs -n auth job/authentik-templates-restore -f
+# 4. Once complete and verified, remove this file from the repo to prevent re-running
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: authentik-templates-restore
+  namespace: auth
+  labels:
+    app: authentik-templates-restore
+    homelab/stack: auth
+spec:
+  # Don't retry if it fails — likely indicates a real problem
+  backoffLimit: 1
+  # Keep the completed job for 24 hours for inspection/debugging
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: authentik-templates-restore
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: restore
+          image: alpine:3.19
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              echo "Starting Authentik templates restore..."
+              cd /mnt/data
+              echo "Extracting backup tarball..."
+              tar -xzf /mnt/backups/authentik_templates.tar.gz
+              echo "Restore completed successfully"
+              ls -lah /mnt/data | head -20
+          volumeMounts:
+            - name: authentik-templates
+              mountPath: /mnt/data
+            - name: backups
+              mountPath: /mnt/backups
+              readOnly: true
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+      volumes:
+        # Target PVC
+        - name: authentik-templates
+          persistentVolumeClaim:
+            claimName: authentik-templates-lh
+        # Backup source from NAS
+        - name: backups
+          hostPath:
+            path: /mnt/nas/backups/backups-of-volumes/2026-05-21_06-56-57
+            type: Directory
