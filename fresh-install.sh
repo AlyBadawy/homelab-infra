@@ -62,7 +62,7 @@ run_playbook() {
     fi
 
     if [ -n "$extra_vars" ]; then
-        ansible-playbook -i "$PLAYBOOKS_DIR/inventory.ini" "$PLAYBOOKS_DIR/$playbook" $extra_vars
+        eval "ansible-playbook -i '$PLAYBOOKS_DIR/inventory.ini' '$PLAYBOOKS_DIR/$playbook' $extra_vars"
     else
         ansible-playbook -i "$PLAYBOOKS_DIR/inventory.ini" "$PLAYBOOKS_DIR/$playbook"
     fi
@@ -211,7 +211,7 @@ main() {
     fi
 
     # 6. ACME Certificate
-    if run_playbook "acme-cert.yml" "TLS Certificate via Vercel" "-e \"vercel_api_token=$VERCEL_TOKEN acme_email=$ACME_EMAIL\""; then
+    if run_playbook "acme-cert.yml" "TLS Certificate via Vercel" "-e vercel_api_token=$VERCEL_TOKEN -e acme_email=$ACME_EMAIL"; then
         COMPLETED_PLAYBOOKS+=("acme-cert.yml")
     else
         FAILED_PLAYBOOKS+=("acme-cert.yml")
@@ -219,7 +219,7 @@ main() {
     fi
 
     # 7. Apply Secrets
-    if run_playbook "apply-secrets.yml" "Kubernetes Secrets & Cluster Configuration" "-e github_repo=$GITHUB_REPO"; then
+    if run_playbook "apply-secrets.yml" "Kubernetes Secrets & Cluster Configuration" "-e github_repo='$GITHUB_REPO'"; then
         COMPLETED_PLAYBOOKS+=("apply-secrets.yml")
     else
         FAILED_PLAYBOOKS+=("apply-secrets.yml")
