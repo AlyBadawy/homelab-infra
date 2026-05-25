@@ -1,0 +1,173 @@
+- name: Generate wildcard TLS certificate via ACME.sh and Vercel DNS
+  hosts: homelab
+
+  vars:
+    kubeconfig_path: "/etc/rancher/k3s/k3s.yaml"
+    domain: "in.alybadawy.com"
+    acme_home: "/root/.acme.sh"
+    cert_secret_name: "wildcard-in-alybadawy-com"
+    ingress_namespace: "ingress-nginx"
+
+  tasks:
+    # ────────────────────────────────────────────────────────────────────────────
+    # Install ACME.sh
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Check if ACME.sh is installed
+      stat:
+        path: "{{ acme_home }}/acme.sh"
+      register: acme_installed
+
+    - name: Install ACME.sh
+      become: true
+      shell: |
+        curl https://get.acme.sh | sh -s email=admin@{{ domain }}
+      when: not acme_installed.stat.exists
+      register: acme_install
+
+    - name: Display ACME.sh installation result
+      debug:
+        msg: "{{ acme_install.stdout_lines }}"
+      when: acme_install is changed
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Request wildcard certificate from Let's Encrypt via Vercel DNS
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Request wildcard certificate
+      become: true
+      shell: |
+        export Vercel_Token="{{ vercel_api_token }}"
+        {{ acme_home }}/acme.sh --issue \
+          -d "{{ domain }}" \
+          -d "*.{{ domain }}" \
+          --dns dns_vercel \
+          --dnssleep 10 \
+          --force
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: acme_issue
+      changed_when: "'Cert success' in acme_issue.stdout or 'Cert skipped' in acme_issue.stdout"
+
+    - name: Display certificate request result
+      debug:
+        msg: "{{ acme_issue.stdout_lines }}"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Locate certificate files
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Find certificate location
+      become: true
+      find:
+        paths: "{{ acme_home }}"
+        patterns: "fullchain.cer"
+        recurse: yes
+      register: cert_fullchain
+
+    - name: Find key location
+      become: true
+      find:
+        paths: "{{ acme_home }}"
+        patterns: "*.key"
+        recurse: yes
+      register: cert_key
+
+    - name: Set certificate paths
+      set_fact:
+        cert_fullchain_path: "{{ cert_fullchain.files[0].path if cert_fullchain.files else '' }}"
+        cert_key_path: "{{ cert_key.files | selectattr('path', 'match', '.*/' + domain + '/') | map(attribute='path') | first if (cert_key.files | selectattr('path', 'match', '.*/' + domain + '/') | list) else '' }}"
+
+    - name: Display certificate paths
+      debug:
+        msg:
+          - "Certificate: {{ cert_fullchain_path }}"
+          - "Key: {{ cert_key_path }}"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Create ingress-nginx namespace if needed
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Create ingress-nginx namespace
+      become: true
+      shell: |
+        kubectl create namespace {{ ingress_namespace }} --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: false
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Create or update TLS secret in Kubernetes
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Delete existing TLS secret (if exists)
+      become: true
+      shell: |
+        kubectl delete secret {{ cert_secret_name }} -n {{ ingress_namespace }} --ignore-not-found=true
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: false
+
+    - name: Create TLS secret from certificate files
+      become: true
+      shell: |
+        kubectl create secret tls {{ cert_secret_name }} \
+          --cert="{{ cert_fullchain_path }}" \
+          --key="{{ cert_key_path }}" \
+          -n {{ ingress_namespace }}
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: secret_create
+      changed_when: "'created' in secret_create.stdout.lower()"
+
+    - name: Display secret creation result
+      debug:
+        msg: "{{ secret_create.stdout }}"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Verification
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Verify TLS secret exists
+      become: true
+      shell: |
+        kubectl get secret {{ cert_secret_name }} -n {{ ingress_namespace }} -o yaml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: secret_verify
+      changed_when: false
+
+    - name: Display secret details
+      debug:
+        msg: "{{ secret_verify.stdout_lines | head(20) }}"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Summary
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Summary
+      debug:
+        msg: |
+          ═══════════════════════════════════════════════════════════════
+          Wildcard TLS Certificate Generated Successfully
+          ═══════════════════════════════════════════════════════════════
+
+          ✓ Domain: {{ domain }}
+          ✓ Wildcard: *.{{ domain }}
+          ✓ Certificate: {{ cert_fullchain_path }}
+          ✓ Private Key: {{ cert_key_path }}
+          ✓ Secret: {{ cert_secret_name }} ({{ ingress_namespace }} namespace)
+
+          Certificate Details:
+          - Issuer: Let's Encrypt
+          - Validation: Vercel DNS (DNS-01)
+          - Auto-renewal: Configured via ACME.sh
+
+          Next Steps:
+          1. Run: ansible-playbook -i ansible/inventory.ini ansible/argocd-bootstrap.yml
+          2. ingress-nginx will use this secret as default TLS certificate
+          3. All ingress resources will use wildcard cert automatically
+
+          Access:
+          - https://argocd.in.alybadawy.com (ArgoCD UI)
+          - https://grafana.in.alybadawy.com (Grafana, if deployed)
+          - https://any-service.in.alybadawy.com (Any service)
+
+          Cert Renewal:
+          ACME.sh automatically renews 30 days before expiration.
+          Manual renewal: acme.sh --renew -d *.{{ domain }} --dns dns_vercel
+
+          ═══════════════════════════════════════════════════════════════
