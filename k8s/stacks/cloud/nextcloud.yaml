@@ -1,17 +1,14 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: nextcloud-data-lh
+  name: nextcloud-data
   namespace: cloud
   labels:
     app.kubernetes.io/name: nextcloud
     homelab/stack: cloud
-    homelab/storage: longhorn
-  annotations:
-    recurring-job-group.longhorn.io/default: enabled
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: longhorn
+  storageClassName: local-path
   resources:
     requests:
       storage: 10Gi
@@ -87,7 +84,7 @@ spec:
       volumes:
         - name: config
           persistentVolumeClaim:
-            claimName: nextcloud-data-lh
+            claimName: nextcloud-data
         - name: data
           hostPath:
             path: ${NAS_NEXTCLOUD_DATA}
