@@ -1,0 +1,77 @@
+- name: Configure swap file
+  hosts: homelab
+
+  vars:
+    swap_size_gb: 12  # Change this to adjust swap size
+
+  tasks:
+    - name: Get current swap info
+      shell: |
+        swapon --show=NAME --noheadings | head -1
+      register: current_swap
+      changed_when: false
+      failed_when: false
+
+    - name: Disable existing swap if present
+      become: true
+      command: swapoff {{ current_swap.stdout }}
+      when: current_swap.stdout | length > 0
+
+    - name: Remove existing swap from fstab
+      become: true
+      lineinfile:
+        path: /etc/fstab
+        regexp: '^\S+\s+none\s+swap'
+        state: absent
+
+    - name: Remove existing swap file
+      become: true
+      file:
+        path: "{{ current_swap.stdout }}"
+        state: absent
+      when: current_swap.stdout | length > 0
+
+    - name: Check if swapfile exists
+      become: true
+      stat:
+        path: /swapfile
+      register: swapfile_stat
+
+    - name: Create new swap file
+      become: true
+      command: >
+        dd if=/dev/zero of=/swapfile bs=1G count={{ swap_size_gb }}
+      when: not swapfile_stat.stat.exists
+
+    - name: Set swap file permissions
+      become: true
+      file:
+        path: /swapfile
+        mode: '0600'
+
+    - name: Format swap file
+      become: true
+      command: mkswap /swapfile
+      register: mkswap_result
+      changed_when: "'Setting up swapspace' in mkswap_result.stdout"
+
+    - name: Add swap file to fstab
+      become: true
+      lineinfile:
+        path: /etc/fstab
+        line: '/swapfile none swap sw 0 0'
+        state: present
+
+    - name: Enable swap
+      become: true
+      command: swapon /swapfile
+
+    - name: Verify swap is active
+      shell: |
+        free -h | grep -i swap
+      register: swap_status
+      changed_when: false
+
+    - name: Display swap status
+      debug:
+        msg: "{{ swap_status.stdout_lines }}"

@@ -1,0 +1,61 @@
+- name: Configure NFS mounts
+  hosts: homelab
+
+  vars:
+    nas_ip: "172.20.20.2" # Change to your NAS IP
+    nfs_opts: "nfsvers=3,defaults,_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=10"
+
+    # Define your NFS mounts here
+    # Add or remove mounts as needed
+    nfs_mounts:
+      - nfs_path: "/var/nfs/shared/homelab"
+        mount_point: "/mnt/nas/homelab"
+      - nfs_path: "/var/nfs/shared/immich"
+        mount_point: "/mnt/nas/immich"
+      - nfs_path: "/var/nfs/shared/nextcloud"
+        mount_point: "/mnt/nas/nextcloud"
+      - nfs_path: "/var/nfs/shared/backups"
+        mount_point: "/mnt/nas/backups"
+
+  tasks:
+    - name: Create mount point directories
+      become: true
+      file:
+        path: "{{ item.mount_point }}"
+        state: directory
+        mode: "0755"
+      loop: "{{ nfs_mounts }}"
+
+    - name: Add NFS mounts to fstab
+      become: true
+      lineinfile:
+        path: /etc/fstab
+        line: "{{ nas_ip }}:{{ item.nfs_path }} {{ item.mount_point }} nfs {{ nfs_opts }} 0 0"
+        regexp: "^{{ nas_ip | regex_escape }}:{{ item.nfs_path | regex_escape }}\\s"
+        state: present
+      loop: "{{ nfs_mounts }}"
+
+    - name: Reload systemd daemon
+      become: true
+      systemd:
+        daemon_reload: yes
+
+    - name: Mount NFS shares
+      become: true
+      mount:
+        src: "{{ nas_ip }}:{{ item.nfs_path }}"
+        path: "{{ item.mount_point }}"
+        fstype: nfs
+        opts: "{{ nfs_opts }}"
+        state: mounted
+      loop: "{{ nfs_mounts }}"
+
+    - name: Verify mounts
+      shell: |
+        mount | grep nfs
+      register: mount_status
+      changed_when: false
+
+    - name: Display mount status
+      debug:
+        msg: "{{ mount_status.stdout_lines }}"

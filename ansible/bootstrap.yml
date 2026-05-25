@@ -1,0 +1,13 @@
+- name: Bootstrap homelab node
+  hosts: homelab
+
+  tasks:
+    - name: Run apt update
+      become: true
+      apt:
+        update_cache: yes
+
+    - name: Run apt upgrade
+      become: true
+      apt:
+        upgrade: dist

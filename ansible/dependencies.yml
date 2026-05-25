@@ -1,0 +1,39 @@
+- name: Install system dependencies
+  hosts: homelab
+
+  vars:
+    required_packages:
+      - curl
+      - git
+      - nfs-common
+      - python3
+      - python3-pip
+      - python3-yaml
+      - gettext-base
+      - open-iscsi
+      - jq
+
+  tasks:
+    - name: Update apt cache
+      become: true
+      apt:
+        update_cache: yes
+      changed_when: false
+
+    - name: Install required packages
+      become: true
+      apt:
+        name: "{{ required_packages }}"
+        state: present
+
+    - name: Enable and start iscsid daemon
+      become: true
+      systemd:
+        name: iscsid
+        state: started
+        enabled: yes
+
+    - name: Enable NTP
+      become: true
+      command: timedatectl set-ntp true
+      changed_when: false
