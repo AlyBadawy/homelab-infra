@@ -185,6 +185,75 @@
         content: "{{ root_app_manifest.content | b64decode }}"
         dest: /tmp/root-app.yaml
 
+    # ────────────────────────────────────────────────────────────────────────────
+    # Set environment variables for CMP plugin (kustomize-envsubst)
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Read cluster-vars ConfigMap for NAS variables
+      become: true
+      shell: |
+        kubectl get configmap cluster-vars -n {{ argocd_namespace }} -o yaml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: cluster_vars_configmap
+      changed_when: false
+
+    - name: Parse NAS variables from ConfigMap
+      set_fact:
+        nas_immich_data: "{{ cluster_vars_configmap.stdout | from_yaml | json_query('data.NAS_IMMICH_DATA') | default('') }}"
+        nas_nextcloud_data: "{{ cluster_vars_configmap.stdout | from_yaml | json_query('data.NAS_NEXTCLOUD_DATA') | default('') }}"
+        nas_backups_dir: "{{ cluster_vars_configmap.stdout | from_yaml | json_query('data.NAS_BACKUPS_DIR') | default('') }}"
+
+    - name: Patch argocd-repo-server with NAS environment variables
+      become: true
+      shell: |
+        kubectl patch deployment argocd-repo-server -n {{ argocd_namespace }} \
+          --type='json' \
+          -p='[
+            {
+              "op": "add",
+              "path": "/spec/template/spec/containers/0/env/-",
+              "value": {
+                "name": "NAS_IMMICH_DATA",
+                "value": "{{ nas_immich_data }}"
+              }
+            },
+            {
+              "op": "add",
+              "path": "/spec/template/spec/containers/0/env/-",
+              "value": {
+                "name": "NAS_NEXTCLOUD_DATA",
+                "value": "{{ nas_nextcloud_data }}"
+              }
+            },
+            {
+              "op": "add",
+              "path": "/spec/template/spec/containers/0/env/-",
+              "value": {
+                "name": "NAS_BACKUPS_DIR",
+                "value": "{{ nas_backups_dir }}"
+              }
+            }
+          ]'
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: repo_server_patch
+      changed_when: "'patched' in repo_server_patch.stdout.lower()"
+      failed_when: false
+
+    - name: Display repo-server patch result
+      debug:
+        msg: "ArgoCD repo-server configured with NAS environment variables"
+      when: "'patched' in repo_server_patch.stdout.lower() or repo_server_patch.rc == 0"
+
+    - name: Wait for argocd-repo-server pod to restart
+      become: true
+      shell: |
+        kubectl rollout status deployment/argocd-repo-server -n {{ argocd_namespace }} --timeout=5m
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: repo_server_restart
+      failed_when: false
+
     - name: Apply root application
       become: true
       shell: |

@@ -150,11 +150,23 @@ main() {
     read -p "Enter email for ACME certificate [admin@in.alybadawy.com]: " ACME_EMAIL
     ACME_EMAIL="${ACME_EMAIL:-admin@in.alybadawy.com}"
 
+    read -p "Enter NAS Nextcloud data path [/mnt/nas/nextcloud]: " NAS_NEXTCLOUD_DATA
+    NAS_NEXTCLOUD_DATA="${NAS_NEXTCLOUD_DATA:-/mnt/nas/nextcloud}"
+
+    read -p "Enter NAS Immich data path [/mnt/nas/immich]: " NAS_IMMICH_DATA
+    NAS_IMMICH_DATA="${NAS_IMMICH_DATA:-/mnt/nas/immich}"
+
+    read -p "Enter NAS backups directory [/mnt/nas/backups]: " NAS_BACKUPS_DIR
+    NAS_BACKUPS_DIR="${NAS_BACKUPS_DIR:-/mnt/nas/backups}"
+
     echo ""
     print_header "Configuration Summary"
     echo "GitHub Repo: $GITHUB_REPO"
     echo "Vercel Token: ${VERCEL_TOKEN:0:10}***"
     echo "ACME Email: $ACME_EMAIL"
+    echo "NAS Nextcloud: $NAS_NEXTCLOUD_DATA"
+    echo "NAS Immich: $NAS_IMMICH_DATA"
+    echo "NAS Backups: $NAS_BACKUPS_DIR"
     echo ""
 
     read -p "Proceed with these settings? (y/n) " -n 1 -r
@@ -221,7 +233,7 @@ main() {
     fi
 
     # 7. Apply Secrets
-    if run_playbook "apply-secrets.yml" "Kubernetes Secrets & Cluster Configuration" "-e github_repo='$GITHUB_REPO'"; then
+    if run_playbook "apply-secrets.yml" "Kubernetes Secrets & Cluster Configuration" "-e github_repo='$GITHUB_REPO' -e nas_immich_data='$NAS_IMMICH_DATA' -e nas_nextcloud_data='$NAS_NEXTCLOUD_DATA' -e nas_backups_dir='$NAS_BACKUPS_DIR'"; then
         COMPLETED_PLAYBOOKS+=("apply-secrets.yml")
     else
         FAILED_PLAYBOOKS+=("apply-secrets.yml")

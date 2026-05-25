@@ -342,20 +342,56 @@ Applies Kubernetes secrets and cluster configuration from NAS:
 ansible-playbook -i ansible/inventory.ini ansible/apply-secrets.yml
 ```
 
+### longhorn-bootstrap.yml
+Manually installs and validates Longhorn storage before ArgoCD:
+- Creates NAS backup directory at `/mnt/nas/backups/k3s-longhorn`
+- Installs Longhorn via Helm with backup target pre-configured
+- Waits for longhorn-manager DaemonSet to be ready
+- Waits for longhorn-ui Deployment to be ready
+- Patches Longhorn backup-target Setting CRD
+- Verifies backup target validation status
+- Verifies longhorn storage class exists
+- **Critical:** Runs BEFORE argocd-bootstrap.yml to ensure storage is healthy
+
+**Why separate from ArgoCD?**
+Longhorn must be healthy and its storage class must exist before ArgoCD attempts to create PVCs. This prevents Pending PVC issues and ensures clean deployment.
+
+**Run:**
+```bash
+ansible-playbook -i ansible/inventory.ini ansible/longhorn-bootstrap.yml
+```
+
+### pre-create-pvcs.yml
+Pre-creates empty PersistentVolumeClaims before applications deploy:
+- Clones git repository to access manifests
+- Creates required namespaces (db, auth, cloud, immich, monitor)
+- Extracts PVC objects from application manifests
+- Creates PVCs with longhorn storage class bindings
+- Waits for PVCs to be Bound to volumes
+
+**Why pre-create?**
+ArgoCD can now deploy applications and immediately bind to existing PVCs instead of waiting for them to be created during sync. Improves deployment speed and reliability.
+
+**Run:**
+```bash
+ansible-playbook -i ansible/inventory.ini ansible/pre-create-pvcs.yml
+```
+
 ### argocd-bootstrap.yml
 Bootstraps the GitOps deployment by applying the root Application:
-- Verifies ArgoCD is installed
+- Verifies ArgoCD is installed via Helm
 - Verifies cluster-vars ConfigMap exists (from apply-secrets.yml)
-- Verifies CMP plugin is configured (in ArgoCD Helm values)
+- Verifies CMP plugin is configured (argocd-cmp-kustomize-envsubst)
+- **Patches argocd-repo-server with NAS environment variables**
 - **Applies root application** from `k8s/argocd/root-app.yaml`
 - Waits for root app to be created
 - Monitors sync progress of all applications
-- Verifies namespaces are created
 - Displays sync wave deployment order
 
 **Prerequisites:**
-1. ArgoCD installed (via Helm)
-2. apply-secrets.yml run (creates cluster-vars ConfigMap)
+1. Longhorn installed and healthy (longhorn-bootstrap.yml)
+2. PVCs pre-created (pre-create-pvcs.yml)
+3. apply-secrets.yml run (creates cluster-vars ConfigMap)
 
 **Run:**
 ```bash
@@ -366,12 +402,22 @@ ansible-playbook -i ansible/inventory.ini ansible/argocd-bootstrap.yml
 1. Checks ArgoCD is installed in argocd namespace
 2. Checks cluster-vars ConfigMap exists
 3. Checks CMP plugin (argocd-cmp-kustomize-envsubst) exists
-4. Applies k8s/argocd/root-app.yaml via kubectl apply
-5. Waits for root app to be created
-6. Displays all applications synced by root app
-7. Monitors ingress-nginx and longhorn (wave 0-1) sync progress
-8. Displays created namespaces
-9. Shows sync status and next steps
+4. **Reads cluster-vars ConfigMap** to extract NAS variables (NAS_IMMICH_DATA, NAS_NEXTCLOUD_DATA, NAS_BACKUPS_DIR)
+5. **Patches argocd-repo-server deployment** with JSON patch operations to add NAS environment variables to container
+6. **Waits for repo-server to rollout** with new environment variables
+7. Applies k8s/argocd/root-app.yaml via kubectl apply
+8. Waits for root app to be created
+9. Displays all applications synced by root app
+10. Monitors ingress-nginx and longhorn (wave 0-1) sync progress
+11. Shows sync status and next steps
+
+**Environment Variable Substitution:**
+The CMP plugin (kustomize-envsubst) uses an awk script to substitute `${VAR}` patterns in Kubernetes manifests. Variables come from the argocd-repo-server process environment. This playbook automatically patches the deployment to include:
+- `NAS_IMMICH_DATA`: Path to Immich media storage on NAS
+- `NAS_NEXTCLOUD_DATA`: Path to Nextcloud data storage on NAS
+- `NAS_BACKUPS_DIR`: Path to backups on NAS
+
+These are used in application manifests to configure hostPath volumes.
 
 **Secrets file format:**
 ```yaml
@@ -520,18 +566,26 @@ The `fresh-install.sh` script automates the entire deployment process by running
 3. **Prompts for configuration:** Requests Vercel token, GitHub repo, ACME email
 4. **Displays summary:** Shows configuration before proceeding
 5. **Runs playbooks in order:**
-   - `bootstrap.yml` - System updates
-   - `dependencies.yml` - Required packages
-   - `swap.yml` - 12GB swap file
-   - `nfs-mounts.yml` - NAS mounts
-   - `k3s.yml` - Kubernetes + Helm
-   - `acme-cert.yml` - TLS certificate
-   - `apply-secrets.yml` - Kubernetes secrets & config
-   - `argocd-bootstrap.yml` - GitOps deployment
-   - `restore-longhorn-volumes.yml` - **(optional)** Restore backups
+   1. `bootstrap.yml` - System updates
+   2. `dependencies.yml` - Required packages
+   3. `swap.yml` - 12GB swap file
+   4. `nfs-mounts.yml` - NAS mounts
+   5. `k3s.yml` - Kubernetes + Helm
+   6. `acme-cert.yml` - TLS certificate
+   7. `apply-secrets.yml` - Kubernetes secrets & cluster-vars ConfigMap
+   8. `longhorn-bootstrap.yml` - Longhorn storage (manual Helm install)
+   9. `pre-create-pvcs.yml` - Pre-create empty PVCs for applications
+   10. `argocd-bootstrap.yml` - GitOps deployment (root application)
+   11. `restore-longhorn-volumes.yml` - **(optional)** Restore backups from NAS
 
 6. **Tracks progress:** Shows completed vs. failed playbooks
 7. **Provides next steps:** kubectl commands for monitoring
+
+**Key order constraints:**
+- `longhorn-bootstrap.yml` must run **before** `pre-create-pvcs.yml` (storage class must exist)
+- `pre-create-pvcs.yml` must run **before** `argocd-bootstrap.yml` (PVCs ready for binding)
+- `apply-secrets.yml` must run **before** `argocd-bootstrap.yml` (cluster-vars ConfigMap needed)
+- `acme-cert.yml` should run **before** `argocd-bootstrap.yml` (TLS secret needed for ingress)
 
 **Setup (first time):**
 ```bash
