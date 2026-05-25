@@ -136,9 +136,9 @@ Installs k3s Kubernetes, Helm, and Longhorn storage:
 **Versions (customizable):**
 ```yaml
 vars:
-  k3s_version: "latest"        # Pin to specific version if needed
-  helm_version: "latest"
-  longhorn_version: "latest"
+  k3s_version: ""              # Leave empty for latest
+  helm_version: ""
+  longhorn_version: ""
 ```
 
 **Run:**
@@ -158,6 +158,84 @@ kubectl get nodes
 kubectl port-forward -n longhorn-system svc/longhorn-frontend 8080:80
 # Then visit http://localhost:8080
 ```
+
+### longhorn-restore.yml
+Discovers Longhorn volume backups and provides guided restore instructions:
+- Scans NAS backup directory for available volume backups
+- **Interactively prompts** you to select which volumes to restore
+- Displays PVC names and backup metadata
+- Provides manual kubectl commands for restoration
+- Use this for **manual control** over the restore process
+
+**Configure backup paths:**
+```yaml
+vars:
+  backup_store_path: "/mnt/nas/backups/longhorn/backupstore"
+  nas_ip: "172.20.20.2"
+  nas_backup_path: "/var/nfs/backups/longhorn/backupstore"
+```
+
+**Run:**
+```bash
+ansible-playbook -i ansible/inventory.ini ansible/longhorn-restore.yml
+```
+
+### restore-longhorn-volumes.yml
+Restore Longhorn volumes from backups (GitOps-ready):
+- Scans NAS for available backups
+- **Interactively asks** which volumes to restore
+- Creates Longhorn Volume objects
+- Creates PersistentVolumeClaims bound to volumes
+- Waits for volumes and PVCs to be fully ready
+- **Ideal for GitOps**: all volumes ready before ArgoCD deployment
+
+**Run:**
+```bash
+ansible-playbook -i ansible/inventory.ini ansible/restore-longhorn-volumes.yml
+```
+
+**Workflow:**
+```bash
+# 1. Restore volumes from backups (this playbook)
+ansible-playbook -i ansible/inventory.ini ansible/restore-longhorn-volumes.yml
+
+# 2. Once complete, deploy ArgoCD with applications
+# (volumes are already ready and populated)
+ansible-playbook -i ansible/inventory.ini argocd.yml
+```
+
+### longhorn-backup-restore.yml
+Automatically restores Longhorn volume backups using Longhorn API:
+- Scans NAS backup directory for available volumes
+- **Interactively prompts** which volumes to restore
+- Creates Longhorn `Volume` objects properly
+- Restores from backup via Longhorn API using Python
+- Automatically creates `PersistentVolumeClaim` for each restored volume
+- Waits for volumes and PVCs to be ready
+- Use this for **fully automated** restoration with proper API handling
+
+**Configure backup paths:**
+```yaml
+vars:
+  backup_store_path: "/mnt/nas/backups/longhorn/backupstore"
+  nas_ip: "172.20.20.2"
+  nas_backup_path: "/var/nfs/backups/longhorn/backupstore"
+```
+
+**Run:**
+```bash
+ansible-playbook -i ansible/inventory.ini ansible/longhorn-backup-restore.yml
+```
+
+**What it does:**
+1. Discovers all available backups on NAS
+2. Shows PVC names (e.g., postgres-data-lh, nextcloud-data-lh)
+3. Prompts you to select which volumes to restore (comma-separated, or "all")
+4. Creates Longhorn Volume objects with correct specifications
+5. Uses Longhorn API to restore from backup via Python
+6. Creates PersistentVolumeClaims for each restored volume
+7. Waits for volumes to be ready
+8. Displays final status and next steps
 
 ## Quick Start
 
