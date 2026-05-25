@@ -21,6 +21,8 @@ metadata:
   labels:
     app.kubernetes.io/name: nextcloud
     homelab/stack: cloud
+    longhorn.io/pvc-name: nextcloud-data-lh
+    longhorn.io/pvc-namespace: cloud
 spec:
   accessModes: [ReadWriteOnce]
   storageClassName: longhorn

@@ -26,6 +26,8 @@ metadata:
   labels:
     app.kubernetes.io/name: postgres
     homelab/stack: db
+    longhorn.io/pvc-name: postgres-data-lh
+    longhorn.io/pvc-namespace: db
 spec:
   accessModes: [ReadWriteOnce]
   storageClassName: longhorn

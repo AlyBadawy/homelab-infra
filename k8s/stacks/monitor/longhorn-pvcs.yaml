@@ -29,6 +29,8 @@ metadata:
   labels:
     app.kubernetes.io/name: grafana
     homelab/stack: monitor
+    longhorn.io/pvc-name: prometheus-grafana-lh
+    longhorn.io/pvc-namespace: monitor
 spec:
   accessModes: [ReadWriteOnce]
   storageClassName: longhorn

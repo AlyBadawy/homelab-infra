@@ -21,6 +21,8 @@ metadata:
   labels:
     app.kubernetes.io/name: authentik
     homelab/stack: auth
+    longhorn.io/pvc-name: authentik-data-lh
+    longhorn.io/pvc-namespace: auth
 spec:
   accessModes: [ReadWriteOnce]
   storageClassName: longhorn
@@ -51,6 +53,8 @@ metadata:
   labels:
     app.kubernetes.io/name: authentik
     homelab/stack: auth
+    longhorn.io/pvc-name: authentik-templates-lh
+    longhorn.io/pvc-namespace: auth
 spec:
   accessModes: [ReadWriteOnce]
   storageClassName: longhorn

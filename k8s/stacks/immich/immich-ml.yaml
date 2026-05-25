@@ -21,6 +21,8 @@ metadata:
   labels:
     app.kubernetes.io/name: immich-machine-learning
     homelab/stack: immich
+    longhorn.io/pvc-name: immich-model-cache-lh
+    longhorn.io/pvc-namespace: immich
 spec:
   accessModes: [ReadWriteOnce]
   storageClassName: longhorn

@@ -81,6 +81,9 @@
         metadata:
           name: {{ item.name }}
           namespace: {{ item.namespace }}
+          labels:
+            longhorn.io/pvc-name: {{ item.name }}
+            longhorn.io/pvc-namespace: {{ item.namespace }}
         spec:
           accessModes:
             - ReadWriteOnce

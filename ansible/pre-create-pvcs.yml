@@ -12,19 +12,19 @@
       - path: "k8s/stacks/db/postgres.yaml"
         namespace: "db"
         backup_name: "postgres-data-lh"
-        size: 21474836480  # 20Gi
+        size: 21474836480 # 20Gi
       - path: "k8s/stacks/db/pgadmin.yaml"
         namespace: "db"
         backup_name: "pgadmin-data-lh"
-        size: 2147483648  # 2Gi
+        size: 2147483648 # 2Gi
       - path: "k8s/stacks/auth/authentik.yaml"
         namespace: "auth"
         backup_name: "authentik-data-lh"
-        size: 2147483648  # 2Gi
+        size: 2147483648 # 2Gi
       - path: "k8s/stacks/cloud/nextcloud.yaml"
         namespace: "cloud"
         backup_name: "nextcloud-data-lh"
-        size: 10737418240  # 10Gi
+        size: 10737418240 # 10Gi
       # NOTE: immich-model-cache and prometheus-grafana-lh are created by ArgoCD
       # They are ephemeral/application-managed and should NOT be pre-created here
 
@@ -194,6 +194,9 @@
         metadata:
           name: $pvc_name
           namespace: $namespace
+          labels:
+            longhorn.io/pvc-name: $pvc_name
+            longhorn.io/pvc-namespace: $namespace
         spec:
           accessModes:
             - ReadWriteOnce
@@ -213,6 +216,9 @@
         metadata:
           name: $pvc_name
           namespace: $namespace
+          labels:
+            longhorn.io/pvc-name: $pvc_name
+            longhorn.io/pvc-namespace: $namespace
         spec:
           accessModes:
             - ReadWriteOnce

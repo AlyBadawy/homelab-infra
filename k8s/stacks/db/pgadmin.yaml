@@ -21,6 +21,8 @@ metadata:
   labels:
     app.kubernetes.io/name: pgadmin
     homelab/stack: db
+    longhorn.io/pvc-name: pgadmin-data-lh
+    longhorn.io/pvc-namespace: db
 spec:
   accessModes: [ReadWriteOnce]
   storageClassName: longhorn
