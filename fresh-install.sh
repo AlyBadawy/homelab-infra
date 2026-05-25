@@ -128,8 +128,10 @@ main() {
     echo "  5. k3s.yml"
     echo "  6. acme-cert.yml (TLS certificate via Vercel)"
     echo "  7. apply-secrets.yml"
-    echo "  8. argocd-bootstrap.yml"
-    echo "  9. restore-longhorn-volumes.yml (optional)"
+    echo "  8. longhorn-bootstrap.yml (install Longhorn + create storage class)"
+    echo "  9. pre-create-pvcs.yml (PVCs bind to longhorn storage class)"
+    echo "  10. argocd-bootstrap.yml (ArgoCD takes over from here)"
+    echo "  11. restore-longhorn-volumes.yml (optional)"
     echo ""
 
     # Get required variables
@@ -227,7 +229,24 @@ main() {
         exit 1
     fi
 
-    # 8. ArgoCD Bootstrap
+    # 8. Longhorn Bootstrap (Install and validate before ArgoCD)
+    if run_playbook "longhorn-bootstrap.yml" "Longhorn Bootstrap (Manual Helm Install & Validation)"; then
+        COMPLETED_PLAYBOOKS+=("longhorn-bootstrap.yml")
+    else
+        FAILED_PLAYBOOKS+=("longhorn-bootstrap.yml")
+        print_error "Longhorn bootstrap failed. Cannot proceed without working storage."
+        exit 1
+    fi
+
+    # 9. Pre-create empty PVCs (fresh install mode)
+    if run_playbook "pre-create-pvcs.yml" "Pre-create PVCs for Fresh Install"; then
+        COMPLETED_PLAYBOOKS+=("pre-create-pvcs.yml")
+    else
+        FAILED_PLAYBOOKS+=("pre-create-pvcs.yml")
+        print_warning "PVC pre-creation failed (optional, will retry on sync)"
+    fi
+
+    # 10. ArgoCD Bootstrap
     if run_playbook "argocd-bootstrap.yml" "ArgoCD Bootstrap (Deploy Root Application)"; then
         COMPLETED_PLAYBOOKS+=("argocd-bootstrap.yml")
     else
@@ -236,7 +255,7 @@ main() {
         exit 1
     fi
 
-    # 9. Longhorn Restore (Optional)
+    # 11. Longhorn Restore (Optional)
     echo ""
     read -p "Restore Longhorn volumes from backups? (y/n) " -n 1 -r
     echo

@@ -1,0 +1,148 @@
+- name: Pre-create empty PVCs for fresh install
+  hosts: homelab
+
+  vars:
+    github_repo: "https://github.com/AlyBadawy/homelab-infra"
+    manifests_dir: "/tmp/homelab-manifests"
+    pvc_script: "/tmp/extract-pvcs.py"
+    pvc_files:
+      - path: "k8s/stacks/db/postgres.yaml"
+        namespace: "db"
+      - path: "k8s/stacks/db/pgadmin.yaml"
+        namespace: "db"
+      - path: "k8s/stacks/auth/authentik.yaml"
+        namespace: "auth"
+      - path: "k8s/stacks/cloud/nextcloud.yaml"
+        namespace: "cloud"
+      - path: "k8s/stacks/immich/immich-ml.yaml"
+        namespace: "immich"
+      - path: "k8s/stacks/monitor/longhorn-pvcs.yaml"
+        namespace: "monitor"
+
+  pre_tasks:
+    - name: Display fresh install mode
+      debug:
+        msg: "Pre-creating empty PVCs for fresh Longhorn install"
+
+  tasks:
+    # ────────────────────────────────────────────────────────────────────────────
+    # Clone manifests from git
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Remove old manifests directory if it exists
+      become: true
+      file:
+        path: "{{ manifests_dir }}"
+        state: absent
+
+    - name: Clone manifests from GitHub
+      git:
+        repo: "{{ github_repo }}"
+        dest: "{{ manifests_dir }}"
+        version: main
+      register: git_clone
+
+    - name: Display git clone result
+      debug:
+        msg: "Cloned manifests from {{ github_repo }}"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Create namespaces for each stack
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Create namespaces
+      become: true
+      shell: |
+        kubectl create namespace {{ item.namespace }} --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      loop:
+        - { namespace: "db" }
+        - { namespace: "auth" }
+        - { namespace: "cloud" }
+        - { namespace: "immich" }
+        - { namespace: "monitor" }
+      changed_when: false
+
+    - name: Display namespaces created
+      debug:
+        msg: "Namespaces created: db, auth, cloud, immich, monitor"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Create PVC extraction script
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Create PVC extraction script
+      copy:
+        content: |
+          #!/usr/bin/env python3
+          import sys
+          import yaml
+
+          if len(sys.argv) < 2:
+              sys.exit(1)
+
+          filename = sys.argv[1]
+          try:
+              with open(filename, 'r') as f:
+                  docs = yaml.safe_load_all(f)
+                  for doc in docs:
+                      if doc and doc.get('kind') == 'PersistentVolumeClaim':
+                          print(yaml.dump(doc))
+          except Exception as e:
+              print(f"Error processing {filename}: {e}", file=sys.stderr)
+        dest: "{{ pvc_script }}"
+        mode: "0755"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Extract and apply PVCs only (not Deployments, Services, etc.)
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Extract and apply PVCs from manifest files
+      become: true
+      shell: |
+        file="{{ manifests_dir }}/{{ item.path }}"
+        ns="{{ item.namespace }}"
+        script="{{ pvc_script }}"
+
+        if [[ ! -f "$file" ]]; then
+          echo "File not found: $file" >&2
+          exit 1
+        fi
+
+        # Extract only PersistentVolumeClaim objects and apply them
+        python3 "$script" "$file" | kubectl apply -n "$ns" -f - || true
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      loop: "{{ pvc_files }}"
+      register: pvc_apply
+      changed_when: "'created' in pvc_apply.stdout.lower() or 'configured' in pvc_apply.stdout.lower()"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Verify PVCs were created
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: List all PVCs in cluster
+      become: true
+      command: kubectl get pvc -A
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: pvc_list
+      changed_when: false
+
+    - name: Display created PVCs
+      debug:
+        msg: "{{ pvc_list.stdout_lines }}"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Summary
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Summary
+      debug:
+        msg:
+          - "✓ Empty PVCs pre-created for fresh install"
+          - "✓ Namespaces ready: db, auth, cloud, immich, monitor"
+          - ""
+          - "Next steps:"
+          - "1. ArgoCD will deploy Longhorn (infra-longhorn app)"
+          - "2. Once Longhorn is ready, ArgoCD will deploy all stacks"
+          - "3. Pods will bind to the pre-created PVCs"
+          - ""
+          - "Monitor deployment:"
+          - "  kubectl get applications -n argocd -w"
+          - "  kubectl get pvc -A"

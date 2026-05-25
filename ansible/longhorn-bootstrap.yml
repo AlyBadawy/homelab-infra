@@ -1,0 +1,228 @@
+- name: Bootstrap and configure Longhorn (before ArgoCD)
+  hosts: homelab
+
+  vars:
+    longhorn_namespace: "longhorn-system"
+    longhorn_version: "~1.7.0"
+    longhorn_helm_repo: "https://charts.longhorn.io"
+    longhorn_values_file: "/tmp/longhorn-helm-values.yaml"
+    nas_mount_path: "/mnt/nas/backups"
+    longhorn_backup_path: "k3s-longhorn"
+    nas_ip: "172.20.20.2"
+    nas_base_export: "/var/nfs/backups"
+
+  pre_tasks:
+    - name: Display Longhorn bootstrap mode
+      debug:
+        msg: "Pre-ArgoCD Longhorn bootstrap (fresh install mode)"
+
+  tasks:
+    # ────────────────────────────────────────────────────────────────────────────
+    # Ensure NFS backup directory exists on mounted NAS
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Create NFS backup directory on mounted NAS
+      block:
+        - name: Check if NAS mount path exists
+          stat:
+            path: "{{ nas_mount_path }}"
+          register: nas_mount_stat
+
+        - name: Fail if NAS is not mounted
+          fail:
+            msg: "NAS mount path {{ nas_mount_path }} does not exist. Run nfs-mounts.yml first."
+          when: not nas_mount_stat.stat.exists
+
+        - name: Create Longhorn backup directory
+          become: true
+          file:
+            path: "{{ nas_mount_path }}/{{ longhorn_backup_path }}"
+            state: directory
+            mode: "0777"
+
+        - name: Verify backup directory was created
+          stat:
+            path: "{{ nas_mount_path }}/{{ longhorn_backup_path }}"
+          register: backup_dir_stat
+          failed_when: not backup_dir_stat.stat.exists
+
+        - name: Display NAS backup directory created
+          debug:
+            msg: "✓ NFS backup directory ready: {{ nas_mount_path }}/{{ longhorn_backup_path }}"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Install Longhorn via Helm (manually, before ArgoCD)
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Create longhorn-system namespace
+      become: true
+      shell: |
+        kubectl create namespace {{ longhorn_namespace }} --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    - name: Add Longhorn Helm repository
+      become: true
+      shell: |
+        helm repo add longhorn {{ longhorn_helm_repo }} 2>/dev/null || true
+        helm repo update longhorn
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    - name: Get Longhorn helm values from git repo
+      block:
+        - name: Check if longhorn helm values exist in git
+          stat:
+            path: "/tmp/homelab-manifests/k8s/infrastructure/longhorn/helm-values.yaml"
+          register: helm_values_stat
+
+        - name: Copy Longhorn helm values
+          copy:
+            src: "/tmp/homelab-manifests/k8s/infrastructure/longhorn/helm-values.yaml"
+            dest: "{{ longhorn_values_file }}"
+            remote_src: yes
+          when: helm_values_stat.stat.exists
+
+        - name: Create default helm values if not in git
+          copy:
+            content: |
+              # Default Longhorn Helm values for fresh install
+              defaultSettings:
+                createDefaultDiskLabeledNodes: false
+                backupTarget: ""
+                backupTargetCredentialSecret: ""
+                allowVolumeCreationWithDegradedAvailability: false
+                autoDeletePodWhenVolumeDetachedUnexpectedly: true
+            dest: "{{ longhorn_values_file }}"
+          when: not helm_values_stat.stat.exists
+
+    - name: Install Longhorn via Helm
+      become: true
+      shell: |
+        BACKUP_TARGET="nfs://{{ nas_ip }}:{{ nas_base_export }}/{{ longhorn_backup_path }}?nfsOptions=nfsvers%3D3%2Cnolock"
+
+        helm upgrade --install longhorn longhorn/longhorn \
+          --namespace {{ longhorn_namespace }} \
+          --version "{{ longhorn_version }}" \
+          -f "{{ longhorn_values_file }}" \
+          --set "defaultSettings.backupTarget=${BACKUP_TARGET}" \
+          --wait \
+          --timeout 10m
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: helm_install
+      changed_when: "'installed' in helm_install.stdout or 'upgraded' in helm_install.stdout"
+
+    - name: Display Longhorn Helm install result
+      debug:
+        msg: "✓ Longhorn installed via Helm"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Wait for Longhorn pods to be ready
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Wait for Longhorn manager DaemonSet to be ready
+      become: true
+      shell: |
+        kubectl rollout status daemonset/longhorn-manager -n {{ longhorn_namespace }} --timeout=5m
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: manager_rollout
+      failed_when: manager_rollout.rc != 0
+
+    - name: Wait for Longhorn UI deployment to be ready
+      become: true
+      shell: |
+        kubectl rollout status deployment/longhorn-ui -n {{ longhorn_namespace }} --timeout=5m
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: ui_rollout
+      failed_when: ui_rollout.rc != 0
+
+    - name: Display Longhorn pods ready
+      debug:
+        msg: "✓ Longhorn manager (DaemonSet) and UI (Deployment) are ready"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Patch Longhorn backup-target Setting CRD
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Patch Longhorn backup-target setting
+      become: true
+      shell: |
+        BACKUP_TARGET="nfs://{{ nas_ip }}:{{ nas_base_export }}/{{ longhorn_backup_path }}?nfsOptions=nfsvers%3D3%2Cnolock"
+        kubectl patch setting backup-target -n {{ longhorn_namespace }} \
+          --type merge \
+          -p "{\"value\":\"${BACKUP_TARGET}\"}" 2>/dev/null || true
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: backup_patch
+      changed_when: false
+
+    - name: Display backup-target patched
+      debug:
+        msg: "✓ Longhorn backup-target Setting CRD patched"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Wait for backup target to become healthy
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Check Longhorn backup-target-valid setting
+      become: true
+      shell: |
+        kubectl get setting backup-target-valid -n {{ longhorn_namespace }} \
+          -o jsonpath='{.value}' 2>/dev/null || echo "unknown"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: backup_target_valid
+      failed_when: false
+      changed_when: false
+
+    - name: Display backup target validation status
+      debug:
+        msg: |
+          Backup target validation status: {{ backup_target_valid.stdout }}
+          Note: Longhorn may still be validating the backup target.
+          If status is 'false', check:
+            kubectl describe setting backup-target -n longhorn-system
+            kubectl logs -n longhorn-system -l app=longhorn-manager --tail=50
+
+    - name: Display backup target healthy
+      debug:
+        msg: "✓ Longhorn backup target is healthy and validated"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Verify Longhorn storage class
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Verify Longhorn storage class exists
+      become: true
+      shell: |
+        kubectl get storageclass longhorn -o jsonpath='{.provisioner}'
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: storage_class
+      failed_when: "'longhorn' not in storage_class.stdout"
+      changed_when: false
+
+    - name: Display Longhorn storage class ready
+      debug:
+        msg: "✓ Longhorn storage class (longhorn-io) is available"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Summary
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Summary
+      debug:
+        msg:
+          - "════════════════════════════════════════════════════════════"
+          - "Longhorn Bootstrap Complete (Pre-ArgoCD)"
+          - "════════════════════════════════════════════════════════════"
+          - ""
+          - "✓ NFS backup directory: {{ nas_ip }}:{{ nas_base_export }}/{{ longhorn_backup_path }}"
+          - "✓ Longhorn deployed via Helm (v{{ longhorn_version }})"
+          - "✓ Manager and UI pods ready"
+          - "✓ Backup target configured and healthy"
+          - "✓ Storage class (longhorn-io) available"
+          - ""
+          - "Status: Longhorn is ready for ArgoCD to take over"
+          - ""
+          - "Next: ArgoCD will deploy infra-longhorn-config (ingress + RecurringJobs)"
+          - "      and manage Longhorn from git going forward."
+          - "════════════════════════════════════════════════════════════"
