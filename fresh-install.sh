@@ -129,9 +129,8 @@ main() {
     echo "  6. acme-cert.yml (TLS certificate via Vercel)"
     echo "  7. apply-secrets.yml"
     echo "  8. longhorn-bootstrap.yml (install Longhorn + create storage class)"
-    echo "  9. pre-create-pvcs.yml (PVCs bind to longhorn storage class)"
+    echo "  9. pre-create-pvcs.yml (restore backups if available, else create empty PVCs)"
     echo "  10. argocd-bootstrap.yml (ArgoCD takes over from here)"
-    echo "  11. restore-longhorn-volumes.yml (optional)"
     echo ""
 
     # Get required variables
@@ -250,12 +249,13 @@ main() {
         exit 1
     fi
 
-    # 9. Pre-create empty PVCs (fresh install mode)
-    if run_playbook "pre-create-pvcs.yml" "Pre-create PVCs for Fresh Install"; then
+    # 9. Pre-create PVCs and restore backups if available
+    if run_playbook "pre-create-pvcs.yml" "Pre-create PVCs (Restore Backups or Fresh Install)"; then
         COMPLETED_PLAYBOOKS+=("pre-create-pvcs.yml")
     else
         FAILED_PLAYBOOKS+=("pre-create-pvcs.yml")
-        print_warning "PVC pre-creation failed (optional, will retry on sync)"
+        print_error "PVC pre-creation is required. Cannot continue."
+        exit 1
     fi
 
     # 10. ArgoCD Bootstrap
@@ -265,21 +265,6 @@ main() {
         FAILED_PLAYBOOKS+=("argocd-bootstrap.yml")
         print_error "ArgoCD bootstrap failed. GitOps deployment did not complete."
         exit 1
-    fi
-
-    # 11. Longhorn Restore (Optional)
-    echo ""
-    read -p "Restore Longhorn volumes from backups? (y/n) " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        if run_playbook "restore-longhorn-volumes.yml" "Restore Longhorn Volumes from NAS Backups"; then
-            COMPLETED_PLAYBOOKS+=("restore-longhorn-volumes.yml")
-        else
-            FAILED_PLAYBOOKS+=("restore-longhorn-volumes.yml")
-            print_warning "Longhorn volume restoration failed (optional)"
-        fi
-    else
-        print_step "Skipped Longhorn restore (optional)"
     fi
 
     # Summary

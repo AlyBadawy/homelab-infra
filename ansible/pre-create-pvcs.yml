@@ -1,28 +1,83 @@
-- name: Pre-create empty PVCs for fresh install
+- name: Pre-create PVCs and restore backups if available
   hosts: homelab
 
   vars:
     github_repo: "https://github.com/AlyBadawy/homelab-infra"
     manifests_dir: "/tmp/homelab-manifests"
     pvc_script: "/tmp/extract-pvcs.py"
+    backup_store_path: "/mnt/nas/backups/k3s-longhorn/backupstore/volumes"
+    kubeconfig_path: "/etc/rancher/k3s/k3s.yaml"
     pvc_files:
       - path: "k8s/stacks/db/postgres.yaml"
         namespace: "db"
+        backup_name: "postgres-data-lh"
+        size: 21474836480  # 20Gi
       - path: "k8s/stacks/db/pgadmin.yaml"
         namespace: "db"
+        backup_name: "pgadmin-data-lh"
+        size: 2147483648  # 2Gi
       - path: "k8s/stacks/auth/authentik.yaml"
         namespace: "auth"
+        backup_name: "authentik-data-lh"
+        size: 2147483648  # 2Gi
       - path: "k8s/stacks/cloud/nextcloud.yaml"
         namespace: "cloud"
+        backup_name: "nextcloud-data-lh"
+        size: 10737418240  # 10Gi
       - path: "k8s/stacks/immich/immich-ml.yaml"
         namespace: "immich"
+        backup_name: "immich-model-cache"
+        size: 5368709120  # 5Gi
       - path: "k8s/stacks/monitor/longhorn-pvcs.yaml"
         namespace: "monitor"
+        backup_name: "prometheus-grafana-lh"
+        size: 5368709120  # 5Gi
 
   pre_tasks:
-    - name: Display fresh install mode
+    - name: Display mode (restore or fresh)
       debug:
-        msg: "Pre-creating empty PVCs for fresh Longhorn install"
+        msg: "Checking for backups to restore, otherwise creating empty PVCs"
+
+    - name: Check if PVCs already exist (safety check)
+      become: true
+      shell: |
+        kubectl get pvc -A 2>/dev/null | grep -E "{{ pvc_files | map(attribute='backup_name') | join('|') }}" | wc -l
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: existing_pvc_count
+      changed_when: false
+
+    - name: Fail if PVCs already exist
+      fail:
+        msg: |
+          ERROR: PVCs already exist in the cluster!
+
+          This playbook is designed for fresh installations only. PVCs already exist:
+          {{ existing_pvc_count.stdout | int }} PVCs found
+
+          If you need to recreate PVCs:
+          1. Manually delete the existing PVCs: kubectl delete pvc <name> -n <namespace>
+          2. OR delete entire namespaces: kubectl delete namespace db auth cloud immich monitor
+          3. Then re-run this playbook
+
+          Do NOT let this playbook delete and recreate PVCs - it can cause issues with
+          ArgoCD finalizers, Longhorn volumes, and other state management.
+      when: existing_pvc_count.stdout | int > 0
+
+    - name: Check if backup directory exists
+      stat:
+        path: "{{ backup_store_path }}"
+      register: backup_dir_stat
+
+    - name: List available backups
+      shell: |
+        if [[ -d "{{ backup_store_path }}" ]]; then
+          ls -1 "{{ backup_store_path }}" | grep -v '^\.' || echo "NO_BACKUPS"
+        else
+          echo "NO_BACKUPS"
+        fi
+      register: available_backups
+      changed_when: false
 
   tasks:
     # ────────────────────────────────────────────────────────────────────────────
@@ -53,7 +108,7 @@
       shell: |
         kubectl create namespace {{ item.namespace }} --dry-run=client -o yaml | kubectl apply -f -
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: "{{ kubeconfig_path }}"
       loop:
         - { namespace: "db" }
         - { namespace: "auth" }
@@ -67,52 +122,118 @@
         msg: "Namespaces created: db, auth, cloud, immich, monitor"
 
     # ────────────────────────────────────────────────────────────────────────────
-    # Create PVC extraction script
+    # Restore Longhorn volumes from backups (if available)
     # ────────────────────────────────────────────────────────────────────────────
-    - name: Create PVC extraction script
-      copy:
-        content: |
-          #!/usr/bin/env python3
-          import sys
-          import yaml
+    - name: Restore Longhorn volumes from backups
+      block:
+        - name: Display backup discovery
+          debug:
+            msg: "Available backups: {{ available_backups.stdout_lines }}"
 
-          if len(sys.argv) < 2:
-              sys.exit(1)
+        - name: Create Longhorn volumes from backups
+          become: true
+          shell: |
+            cat << EOF | kubectl apply -f -
+            apiVersion: longhorn.io/v1beta1
+            kind: Volume
+            metadata:
+              name: {{ item.backup_name }}
+              namespace: longhorn-system
+            spec:
+              size: {{ item.size }}
+              numberOfReplicas: 1
+              fromBackup: "{{ item.backup_name }}"
+            EOF
+          environment:
+            KUBECONFIG: "{{ kubeconfig_path }}"
+          loop: "{{ pvc_files }}"
+          when: "item.backup_name in available_backups.stdout_lines"
+          register: backup_restore
+          changed_when: "'created' in backup_restore.stdout.lower()"
+          failed_when: false
 
-          filename = sys.argv[1]
-          try:
-              with open(filename, 'r') as f:
-                  docs = yaml.safe_load_all(f)
-                  for doc in docs:
-                      if doc and doc.get('kind') == 'PersistentVolumeClaim':
-                          print(yaml.dump(doc))
-          except Exception as e:
-              print(f"Error processing {filename}: {e}", file=sys.stderr)
-        dest: "{{ pvc_script }}"
-        mode: "0755"
+        - name: Wait for Longhorn volumes to restore (this may take several minutes)
+          become: true
+          shell: |
+            kubectl get volume {{ item.backup_name }} -n longhorn-system -o jsonpath='{.status.state}'
+          environment:
+            KUBECONFIG: "{{ kubeconfig_path }}"
+          register: volume_state
+          until: volume_state.stdout == "attached"
+          retries: 60
+          delay: 5
+          loop: "{{ pvc_files }}"
+          when: "item.backup_name in available_backups.stdout_lines"
+          changed_when: false
+
+        - name: Display restored volumes
+          debug:
+            msg: |
+              ✓ Longhorn volumes restored from backups:
+              {% for item in pvc_files %}
+              {% if item.backup_name in available_backups.stdout_lines %}
+              - {{ item.backup_name }}
+              {% endif %}
+              {% endfor %}
 
     # ────────────────────────────────────────────────────────────────────────────
-    # Extract and apply PVCs only (not Deployments, Services, etc.)
+    # Create or restore PVCs
     # ────────────────────────────────────────────────────────────────────────────
-    - name: Extract and apply PVCs from manifest files
+    - name: Create PVCs (restored or empty)
       become: true
       shell: |
-        file="{{ manifests_dir }}/{{ item.path }}"
-        ns="{{ item.namespace }}"
-        script="{{ pvc_script }}"
+        namespace="{{ item.namespace }}"
+        pvc_name="{{ item.backup_name }}"
+        size_bytes="{{ item.size }}"
+        has_backup="{{ item.backup_name in available_backups.stdout_lines }}"
 
-        if [[ ! -f "$file" ]]; then
-          echo "File not found: $file" >&2
-          exit 1
+        # Convert bytes to Kubernetes format (e.g., 20Gi)
+        size_gb=$((size_bytes / 1073741824))
+        size_k8s="${size_gb}Gi"
+
+        if [ "$has_backup" = "True" ]; then
+          # Bind PVC to restored Longhorn volume
+          cat << EOF | kubectl apply -n "$namespace" -f -
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: $pvc_name
+          namespace: $namespace
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          storageClassName: longhorn
+          resources:
+            requests:
+              storage: $size_k8s
+          selector:
+            matchLabels:
+              longhornvolume: $pvc_name
+        EOF
+        else
+          # Create empty PVC for fresh install
+          cat << EOF | kubectl apply -n "$namespace" -f -
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: $pvc_name
+          namespace: $namespace
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          storageClassName: longhorn
+          resources:
+            requests:
+              storage: $size_k8s
+        EOF
         fi
-
-        # Extract only PersistentVolumeClaim objects and apply them
-        python3 "$script" "$file" | kubectl apply -n "$ns" -f - || true
+      args:
+        executable: /bin/bash
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: "{{ kubeconfig_path }}"
       loop: "{{ pvc_files }}"
-      register: pvc_apply
-      changed_when: "'created' in pvc_apply.stdout.lower() or 'configured' in pvc_apply.stdout.lower()"
+      register: pvc_create
+      changed_when: "'created' in pvc_create.stdout.lower() or 'configured' in pvc_create.stdout.lower()"
 
     # ────────────────────────────────────────────────────────────────────────────
     # Verify PVCs were created
@@ -134,15 +255,35 @@
     # ────────────────────────────────────────────────────────────────────────────
     - name: Summary
       debug:
-        msg:
-          - "✓ Empty PVCs pre-created for fresh install"
-          - "✓ Namespaces ready: db, auth, cloud, immich, monitor"
-          - ""
-          - "Next steps:"
-          - "1. ArgoCD will deploy Longhorn (infra-longhorn app)"
-          - "2. Once Longhorn is ready, ArgoCD will deploy all stacks"
-          - "3. Pods will bind to the pre-created PVCs"
-          - ""
-          - "Monitor deployment:"
-          - "  kubectl get applications -n argocd -w"
-          - "  kubectl get pvc -A"
+        msg: |
+          ═══════════════════════════════════════════════════════════════
+          PVC Pre-Creation Complete
+          ═══════════════════════════════════════════════════════════════
+
+          ✓ Namespaces created: db, auth, cloud, immich, monitor
+
+          {% if available_backups.stdout_lines and available_backups.stdout_lines[0] != 'NO_BACKUPS' %}
+          ✓ Longhorn volumes RESTORED from backups:
+          {% for item in pvc_files %}
+          {% if item.backup_name in available_backups.stdout_lines %}
+            - {{ item.backup_name }} ({{ item.size / 1073741824 | int }}Gi)
+          {% endif %}
+          {% endfor %}
+
+          ✓ PVCs created and bound to restored volumes
+          Applications will start with existing data intact
+          {% else %}
+          ✓ Empty PVCs created for fresh install
+          Applications will initialize with empty databases
+          {% endif %}
+
+          Next steps:
+          1. ArgoCD deploys applications
+          2. Pods bind to pre-created/restored PVCs
+          3. Services are ready immediately
+
+          Monitor PVC status:
+            kubectl get pvc -A
+            kubectl get applications -n argocd -w
+
+          ═══════════════════════════════════════════════════════════════

@@ -9,7 +9,7 @@
     nas_mount_path: "/mnt/nas/backups"
     longhorn_backup_path: "k3s-longhorn"
     nas_ip: "172.20.20.2"
-    nas_base_export: "/var/nfs/backups"
+    nas_base_export: "/var/nfs/shared/backups"
 
   pre_tasks:
     - name: Display Longhorn bootstrap mode

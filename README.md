@@ -55,6 +55,7 @@ ansible_python_interpreter=/usr/bin/python3
 ```
 
 **To add more servers**, simply add new lines in the `[homelab]` section:
+
 ```ini
 server1 ansible_host=172.20.20.3
 server2 ansible_host=172.20.20.4
@@ -63,55 +64,68 @@ server2 ansible_host=172.20.20.4
 ## Available Playbooks
 
 ### bootstrap.yml
+
 Performs initial system setup and updates:
+
 - Runs `apt update` to refresh package lists
 - Runs `apt upgrade` (dist-upgrade) to update all packages to latest versions
 
 **Run:**
+
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/bootstrap.yml
 ```
 
 ### dependencies.yml
+
 Installs system dependencies required for homelab services:
+
 - **Package Management**: curl, git, jq, gettext-base
 - **Storage**: nfs-common, open-iscsi
 - **Python**: python3, python3-pip, python3-yaml
 - **Services**: Enables iscsid daemon (required for storage), enables NTP time sync
 
 **Run:**
+
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/dependencies.yml
 ```
 
 ### swap.yml
+
 Configures a swap file on the system:
+
 - Removes any existing swap
 - Creates a new swap file (default: 12GB, configurable via `swap_size_gb` variable)
 - Persists swap configuration in `/etc/fstab`
 
 **Edit swap size:**
+
 ```yaml
 vars:
-  swap_size_gb: 12  # Change this value
+  swap_size_gb: 12 # Change this value
 ```
 
 **Run:**
+
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/swap.yml
 ```
 
 ### nfs-mounts.yml
+
 Mounts NFS shares from your NAS:
+
 - Creates mount point directories
 - Adds entries to `/etc/fstab` for persistent mounting
 - Mounts all configured shares
 - Configures NFS options (timeout, automount, etc.)
 
 **Configure your NAS and mounts:**
+
 ```yaml
 vars:
-  nas_ip: "172.20.20.1"  # Your NAS IP
+  nas_ip: "172.20.20.1" # Your NAS IP
   nfs_mounts:
     - nfs_path: "/var/nfs/homelab"
       mount_point: "/mnt/nas/homelab"
@@ -121,12 +135,15 @@ vars:
 ```
 
 **Run:**
+
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/nfs-mounts.yml
 ```
 
 ### k3s.yml
+
 Installs k3s Kubernetes and Helm package manager:
+
 - Installs k3s **without Traefik** (nginx-ingress to be added later via ArgoCD)
 - Installs Helm package manager
 - **Does NOT install Longhorn** — managed entirely by ArgoCD (prevents Helm conflicts)
@@ -134,18 +151,21 @@ Installs k3s Kubernetes and Helm package manager:
 - Ready for ArgoCD to take over infrastructure management
 
 **Versions (customizable):**
+
 ```yaml
 vars:
-  k3s_version: ""              # Leave empty for latest
+  k3s_version: "" # Leave empty for latest
   helm_version: ""
 ```
 
 **Run:**
+
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/k3s.yml
 ```
 
 **After installation:**
+
 ```bash
 # Set kubeconfig
 export KUBECONFIG=~/.kube/k3s-config.yaml
@@ -158,7 +178,9 @@ kubectl get nodes
 Longhorn is installed by ArgoCD via the `infra-longhorn` Application (see `k8s/argocd/apps/`). This avoids Helm state conflicts and establishes a single source of truth (git) for Longhorn configuration.
 
 ### longhorn-restore.yml
+
 Discovers Longhorn volume backups and provides guided restore instructions:
+
 - Scans NAS backup directory for available volume backups
 - **Interactively prompts** you to select which volumes to restore
 - Displays PVC names and backup metadata
@@ -166,20 +188,24 @@ Discovers Longhorn volume backups and provides guided restore instructions:
 - Use this for **manual control** over the restore process
 
 **Configure backup paths:**
+
 ```yaml
 vars:
   backup_store_path: "/mnt/nas/backups/longhorn/backupstore"
   nas_ip: "172.20.20.2"
-  nas_backup_path: "/var/nfs/backups/longhorn/backupstore"
+  nas_backup_path: "/var/nfs/shared/backups/longhorn/backupstore"
 ```
 
 **Run:**
+
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/longhorn-restore.yml
 ```
 
 ### restore-longhorn-volumes.yml
+
 Restore Longhorn volumes from backups (GitOps-ready):
+
 - Scans NAS for available backups
 - **Interactively asks** which volumes to restore
 - Creates Longhorn Volume objects
@@ -188,11 +214,13 @@ Restore Longhorn volumes from backups (GitOps-ready):
 - **Ideal for GitOps**: all volumes ready before ArgoCD deployment
 
 **Run:**
+
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/restore-longhorn-volumes.yml
 ```
 
 **Workflow:**
+
 ```bash
 # 1. Restore volumes from backups (this playbook)
 ansible-playbook -i ansible/inventory.ini ansible/restore-longhorn-volumes.yml
@@ -203,7 +231,9 @@ ansible-playbook -i ansible/inventory.ini argocd.yml
 ```
 
 ### longhorn-backup-restore.yml
+
 Automatically restores Longhorn volume backups using Longhorn API:
+
 - Scans NAS backup directory for available volumes
 - **Interactively prompts** which volumes to restore
 - Creates Longhorn `Volume` objects properly
@@ -213,19 +243,22 @@ Automatically restores Longhorn volume backups using Longhorn API:
 - Use this for **fully automated** restoration with proper API handling
 
 **Configure backup paths:**
+
 ```yaml
 vars:
   backup_store_path: "/mnt/nas/backups/longhorn/backupstore"
   nas_ip: "172.20.20.2"
-  nas_backup_path: "/var/nfs/backups/longhorn/backupstore"
+  nas_backup_path: "/var/nfs/shared/backups/longhorn/backupstore"
 ```
 
 **Run:**
+
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/longhorn-backup-restore.yml
 ```
 
 **What it does:**
+
 1. Discovers all available backups on NAS
 2. Shows PVC names (e.g., postgres-data-lh, nextcloud-data-lh)
 3. Prompts you to select which volumes to restore (comma-separated, or "all")
@@ -236,7 +269,9 @@ ansible-playbook -i ansible/inventory.ini ansible/longhorn-backup-restore.yml
 8. Displays final status and next steps
 
 ### acme-cert.yml
+
 Generates a wildcard TLS certificate for your domain via Let's Encrypt using ACME.sh:
+
 - Installs ACME.sh to your user home directory (`~/.acme.sh`)
 - Uses Vercel DNS-01 validation (requires Vercel API token)
 - Generates wildcard certificate for `*.{{ domain }}` and `{{ domain }}`
@@ -245,24 +280,28 @@ Generates a wildcard TLS certificate for your domain via Let's Encrypt using ACM
 - **Required before deploying ingress-nginx** to serve HTTPS traffic
 
 **Prerequisites:**
+
 - Domain must be using Vercel's DNS service
 - Vercel API token (personal access token from Vercel dashboard)
 
 **Configuration:**
+
 ```yaml
 vars:
-  domain: "in.alybadawy.com"              # Your domain
-  acme_email: "admin@in.alybadawy.com"    # Email for ACME notifications
-  cert_secret_name: "wildcard-in-alybadawy-com"  # K8s secret name
+  domain: "in.alybadawy.com" # Your domain
+  acme_email: "admin@in.alybadawy.com" # Email for ACME notifications
+  cert_secret_name: "wildcard-in-alybadawy-com" # K8s secret name
 ```
 
 **Run:**
+
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/acme-cert.yml \
   -e "vercel_api_token=YOUR_VERCEL_TOKEN"
 ```
 
 **Optional: custom email**
+
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/acme-cert.yml \
   -e "vercel_api_token=YOUR_TOKEN" \
@@ -270,6 +309,7 @@ ansible-playbook -i ansible/inventory.ini ansible/acme-cert.yml \
 ```
 
 **What it does:**
+
 1. Validates Vercel API token is provided
 2. Creates NAS certs directory (`/mnt/nas/homelab/certs`)
 3. Installs ACME.sh (if not already installed)
@@ -281,11 +321,13 @@ ansible-playbook -i ansible/inventory.ini ansible/acme-cert.yml \
 9. Verifies both NAS and Kubernetes secret creation
 
 **Certificate Storage:**
+
 - **NAS:** `/mnt/nas/homelab/certs/` (persistent, survives fresh installs)
 - **Kubernetes:** `ingress-nginx/wildcard-in-alybadawy-com` secret
 - **ACME.sh:** `~/.acme.sh/wildcard_in.alybadawy.com/` (registration + renewal config)
 
 **Auto-Renewal Workflow:**
+
 1. ACME.sh cron runs twice daily
 2. If cert expires in <30 days, renewal begins
 3. Vercel DNS-01 validation using token from `account.conf`
@@ -299,6 +341,7 @@ ansible-playbook -i ansible/inventory.ini ansible/acme-cert.yml \
 ```
 
 **Verify certificate:**
+
 ```bash
 # Check NAS certificate
 openssl x509 -enddate -noout -in /mnt/nas/homelab/certs/fullchain.pem
@@ -312,24 +355,29 @@ kubectl get secret wildcard-in-alybadawy-com -n ingress-nginx \
 ```
 
 **Check renewal status:**
+
 ```bash
 ~/.acme.sh/acme.sh --list
 ~/.acme.sh/acme.sh --info -d "*.in.alybadawy.com"
 ```
 
 **Manual renewal:**
+
 ```bash
 ~/.acme.sh/acme.sh --renew -d "in.alybadawy.com" \
   -d "*.in.alybadawy.com" --dns dns_vercel
 ```
 
 **View auto-renewal logs:**
+
 ```bash
 ~/.acme.sh/acme.sh --cron --debug
 ```
 
 ### apply-secrets.yml
+
 Applies Kubernetes secrets and cluster configuration from NAS:
+
 - Reads secrets from `/mnt/nas/homelab/secrets.yaml`
 - Creates required namespaces (from secrets + argocd)
 - **Applies Kubernetes Secret objects** with base64-encoded data
@@ -338,12 +386,15 @@ Applies Kubernetes secrets and cluster configuration from NAS:
 - Use this **before deploying ArgoCD** to ensure all secrets and config are available
 
 **Run:**
+
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/apply-secrets.yml
 ```
 
 ### longhorn-bootstrap.yml
+
 Manually installs and validates Longhorn storage before ArgoCD:
+
 - Creates NAS backup directory at `/mnt/nas/backups/k3s-longhorn`
 - Installs Longhorn via Helm with backup target pre-configured
 - Waits for longhorn-manager DaemonSet to be ready
@@ -357,28 +408,70 @@ Manually installs and validates Longhorn storage before ArgoCD:
 Longhorn must be healthy and its storage class must exist before ArgoCD attempts to create PVCs. This prevents Pending PVC issues and ensures clean deployment.
 
 **Run:**
+
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/longhorn-bootstrap.yml
 ```
 
 ### pre-create-pvcs.yml
-Pre-creates empty PersistentVolumeClaims before applications deploy:
-- Clones git repository to access manifests
+
+Pre-creates PersistentVolumeClaims and automatically restores backups if available:
+
+- **Safety first:** Fails immediately if any PVCs already exist (prevents dangerous delete/recreate cycles)
+- Checks for available Longhorn backups in `/mnt/nas/backups/k3s-longhorn/backupstore/volumes/`
+- **If backups exist:** Restores them to Longhorn volumes and creates PVCs bound to restored data
+- **If no backups (fresh install):** Creates empty PVCs for applications to initialize
 - Creates required namespaces (db, auth, cloud, immich, monitor)
-- Extracts PVC objects from application manifests
-- Creates PVCs with longhorn storage class bindings
-- Waits for PVCs to be Bound to volumes
+- Waits for Longhorn volumes to restore (if restoring from backup)
 
 **Why pre-create?**
-ArgoCD can now deploy applications and immediately bind to existing PVCs instead of waiting for them to be created during sync. Improves deployment speed and reliability.
+- ArgoCD can immediately deploy applications to existing PVCs
+- Backups are restored BEFORE applications start, so databases have real data
+- No manual restoration steps needed - it's automatic in the deployment pipeline
+- Works seamlessly for both fresh installs (empty) and restores (with data)
+
+**Safety Design:**
+- This playbook is **designed for fresh installations only** (no PVCs exist yet)
+- If PVCs already exist, the playbook **fails fast** with clear instructions
+- This prevents issues with ArgoCD finalizers, Longhorn state, and other lifecycle management
+- If you need to recreate PVCs after a failed run, manually clean them up first
 
 **Run:**
+
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/pre-create-pvcs.yml
 ```
 
+**If PVCs already exist:**
+
+Clean them up manually, then re-run:
+
+```bash
+# Option 1: Delete individual PVCs
+kubectl delete pvc <name> -n <namespace>
+
+# Option 2: Delete entire application namespaces (including all PVCs)
+kubectl delete namespace db auth cloud immich monitor
+
+# Then re-run the playbook
+ansible-playbook -i ansible/inventory.ini ansible/pre-create-pvcs.yml
+```
+
+**What it does:**
+1. Checks that NO PVCs already exist (fails if any are found)
+2. Discovers backups on NAS at `/mnt/nas/backups/k3s-longhorn/backupstore/volumes/`
+3. For each backup found:
+   - Creates a Longhorn Volume with `fromBackup` set to restore data
+   - Waits for the volume to finish restoring (~5-15 minutes depending on size)
+   - Creates a PVC bound to that restored volume
+4. For PVCs without backups (fresh install):
+   - Creates empty PVCs immediately
+   - Applications will initialize fresh databases
+
 ### argocd-bootstrap.yml
+
 Bootstraps the GitOps deployment by applying the root Application:
+
 - Verifies ArgoCD is installed via Helm
 - Verifies cluster-vars ConfigMap exists (from apply-secrets.yml)
 - Verifies CMP plugin is configured (argocd-cmp-kustomize-envsubst)
@@ -389,16 +482,19 @@ Bootstraps the GitOps deployment by applying the root Application:
 - Displays sync wave deployment order
 
 **Prerequisites:**
+
 1. Longhorn installed and healthy (longhorn-bootstrap.yml)
 2. PVCs pre-created (pre-create-pvcs.yml)
 3. apply-secrets.yml run (creates cluster-vars ConfigMap)
 
 **Run:**
+
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/argocd-bootstrap.yml
 ```
 
 **What it does:**
+
 1. Checks ArgoCD is installed in argocd namespace
 2. Checks cluster-vars ConfigMap exists
 3. Checks CMP plugin (argocd-cmp-kustomize-envsubst) exists
@@ -413,6 +509,7 @@ ansible-playbook -i ansible/inventory.ini ansible/argocd-bootstrap.yml
 
 **Environment Variable Substitution:**
 The CMP plugin (kustomize-envsubst) uses an awk script to substitute `${VAR}` patterns in Kubernetes manifests. Variables come from the argocd-repo-server process environment. This playbook automatically patches the deployment to include:
+
 - `NAS_IMMICH_DATA`: Path to Immich media storage on NAS
 - `NAS_NEXTCLOUD_DATA`: Path to Nextcloud data storage on NAS
 - `NAS_BACKUPS_DIR`: Path to backups on NAS
@@ -420,6 +517,7 @@ The CMP plugin (kustomize-envsubst) uses an awk script to substitute `${VAR}` pa
 These are used in application manifests to configure hostPath volumes.
 
 **Secrets file format:**
+
 ```yaml
 secrets:
   - name: database-credentials
@@ -435,6 +533,7 @@ secrets:
 ```
 
 **Configure cluster variables via CLI (optional):**
+
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/apply-secrets.yml \
   -e "nas_ip=172.20.20.2" \
@@ -443,6 +542,7 @@ ansible-playbook -i ansible/inventory.ini ansible/apply-secrets.yml \
 ```
 
 **Or via group_vars/all.yml:**
+
 ```yaml
 nas_ip: "172.20.20.2"
 timezone: "UTC"
@@ -450,16 +550,19 @@ github_repo: "https://github.com/user/homelab-gitops"
 ```
 
 **Default values:**
+
 - Domain: `in.alybadawy.com` (set in playbook)
 - NAS IP: `172.20.20.2`
 - Timezone: `UTC`
 
 **Run:**
+
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/apply-secrets.yml
 ```
 
 **What it does:**
+
 1. Validates secrets file exists at `/mnt/nas/homelab/secrets.yaml`
 2. Extracts unique namespaces from secrets definition
 3. Creates all required namespaces
@@ -476,6 +579,7 @@ ansible-playbook -i ansible/inventory.ini ansible/apply-secrets.yml
 ## Quick Start
 
 **Recommended: Run the automated fresh install script**
+
 ```bash
 chmod +x fresh-install.sh
 ./fresh-install.sh
@@ -486,30 +590,33 @@ This will guide you through the entire deployment process with interactive promp
 **Manual step-by-step:**
 
 1. **Update the inventory** to match your server details:
+
    ```bash
    nano ansible/inventory.ini
    ```
 
 2. **Test SSH connectivity**:
+
    ```bash
    ansible all -i ansible/inventory.ini -m ping
    ```
 
 3. **Run playbooks in order:**
+
    ```bash
    # System setup (bootstrap, dependencies, swap, NFS)
    ansible-playbook -i ansible/inventory.ini ansible/bootstrap.yml
    ansible-playbook -i ansible/inventory.ini ansible/dependencies.yml
    ansible-playbook -i ansible/inventory.ini ansible/swap.yml
    ansible-playbook -i ansible/inventory.ini ansible/nfs-mounts.yml
-   
+
    # Kubernetes setup
    ansible-playbook -i ansible/inventory.ini ansible/k3s.yml
-   
+
    # TLS certificate (required for ingress)
    ansible-playbook -i ansible/inventory.ini ansible/acme-cert.yml \
      -e "vercel_api_token=YOUR_TOKEN"
-   
+
    # Kubernetes secrets and ArgoCD
    ansible-playbook -i ansible/inventory.ini ansible/apply-secrets.yml
    ansible-playbook -i ansible/inventory.ini ansible/argocd-bootstrap.yml
@@ -528,6 +635,7 @@ ssh-copy-id -i ~/.ssh/homelab_key.pub homelab@172.20.20.3
 ```
 
 Then update `inventory.ini`:
+
 ```ini
 [homelab:vars]
 ansible_ssh_private_key_file=~/.ssh/homelab_key
@@ -536,12 +644,15 @@ ansible_ssh_private_key_file=~/.ssh/homelab_key
 ## Making Changes
 
 When modifying playbooks:
+
 1. Test syntax first:
+
    ```bash
    ansible-playbook --syntax-check ansible/bootstrap.yml
    ```
 
 2. Do a dry-run before applying:
+
    ```bash
    ansible-playbook -i ansible/inventory.ini ansible/bootstrap.yml --check
    ```
@@ -561,6 +672,7 @@ The `fresh-install.sh` script automates the entire deployment process by running
 ```
 
 **What it does:**
+
 1. **Validates requirements:** Checks for ansible-playbook, ssh, inventory.ini
 2. **Tests SSH connectivity:** Verifies you can reach all servers
 3. **Prompts for configuration:** Requests Vercel token, GitHub repo, ACME email
@@ -582,12 +694,14 @@ The `fresh-install.sh` script automates the entire deployment process by running
 7. **Provides next steps:** kubectl commands for monitoring
 
 **Key order constraints:**
+
 - `longhorn-bootstrap.yml` must run **before** `pre-create-pvcs.yml` (storage class must exist)
 - `pre-create-pvcs.yml` must run **before** `argocd-bootstrap.yml` (PVCs ready for binding)
 - `apply-secrets.yml` must run **before** `argocd-bootstrap.yml` (cluster-vars ConfigMap needed)
 - `acme-cert.yml` should run **before** `argocd-bootstrap.yml` (TLS secret needed for ingress)
 
 **Setup (first time):**
+
 ```bash
 # Make script executable
 chmod +x fresh-install.sh
@@ -600,19 +714,22 @@ ansible all -i ansible/inventory.ini -m ping
 ```
 
 **Run the fresh install:**
+
 ```bash
 ./fresh-install.sh
 ```
 
 **You will be prompted for:**
+
 ```
 Enter your Vercel API token: [YOUR_TOKEN]
-Enter GitHub repository URL [https://github.com/AlyBadawy/homelab-infra]: 
-Enter email for ACME certificate [admin@in.alybadawy.com]: 
+Enter GitHub repository URL [https://github.com/AlyBadawy/homelab-infra]:
+Enter email for ACME certificate [admin@in.alybadawy.com]:
 ```
 
 **Progress tracking:**
 The script will confirm before running each playbook:
+
 ```
 ════════════════════════════════════════════════════════════════
 Running: System Bootstrap (apt update/upgrade)
@@ -622,6 +739,7 @@ Continue? (y/n)
 
 **If something fails:**
 The script tracks which playbooks completed and which failed. Fix the issue and re-run:
+
 ```bash
 # Re-run just the failed playbook
 ansible-playbook -i ansible/inventory.ini ansible/FAILED_PLAYBOOK.yml
@@ -632,11 +750,13 @@ ansible-playbook -i ansible/inventory.ini ansible/FAILED_PLAYBOOK.yml
 
 **After completion:**
 The script displays:
+
 - List of successfully completed playbooks
 - List of any failed playbooks
 - Next steps for monitoring ArgoCD deployment
 
 **Monitor deployment:**
+
 ```bash
 # Watch applications sync
 watch kubectl get applications -n argocd
@@ -651,6 +771,7 @@ kubectl get pods -A --watch
 ## Playbook Checklist
 
 ### Infrastructure Provisioning (Ansible)
+
 - [x] System bootstrap (apt update/upgrade)
 - [x] System dependencies (packages, NTP, iSCSI)
 - [x] Swap file configuration (12GB)
@@ -663,6 +784,7 @@ kubectl get pods -A --watch
 - [x] **Fresh install automation script** (fresh-install.sh)
 
 ### Infrastructure Components (via ArgoCD)
+
 - [x] nginx-ingress (ingress-nginx, wave 0)
 - [x] Longhorn storage (infra-longhorn, wave 0)
 - [ ] Monitoring stack (Prometheus, Grafana) (via ArgoCD, wave 1)
@@ -675,15 +797,18 @@ kubectl get pods -A --watch
 ## Troubleshooting
 
 **Connection refused:**
+
 - Verify the server IP in `inventory.ini`
 - Check SSH key permissions: `chmod 600 ~/.ssh/homelab_key`
 - Ensure the `ansible_user` has SSH access
 
 **Python interpreter not found:**
+
 - SSH to the server and verify: `python3 --version`
 - Update `ansible_python_interpreter` in `inventory.ini` if needed
 
 **Permission denied errors:**
+
 - Verify `ansible_user` has sudo privileges
 - Test: `ssh homelab@172.20.20.3 "sudo whoami"`
 
@@ -692,6 +817,7 @@ kubectl get pods -A --watch
 The homelab uses **ArgoCD** for true GitOps deployment. All Kubernetes applications are declaratively defined in the `k8s/` directory and automatically synced to the cluster.
 
 **Key concepts:**
+
 - **Single source of truth:** The GitHub repository
 - **Automatic syncs:** Every git push triggers cluster updates
 - **Variable substitution:** Environment-specific values injected at sync time
@@ -703,12 +829,14 @@ The homelab uses **ArgoCD** for true GitOps deployment. All Kubernetes applicati
 ### Quick GitOps Workflow
 
 **Recommended: Use `fresh-install.sh` for automated deployment**
+
 ```bash
 chmod +x fresh-install.sh
 ./fresh-install.sh
 ```
 
 **Manual workflow (if not using script):**
+
 ```bash
 # 1. Bootstrap system
 ansible-playbook -i ansible/inventory.ini ansible/bootstrap.yml
@@ -750,12 +878,14 @@ git push
 ## Contributing
 
 This is a personal homelab setup. For improvements or additions:
+
 1. Create a new branch
 2. Test changes locally (use `--dry-run` with Ansible)
 3. Commit with clear messages
 4. Push and let ArgoCD sync
 
 For new applications:
+
 1. Create stack directory: `k8s/stacks/myapp/`
 2. Define manifests with variable substitution (`${VAR}`)
 3. Create Application CRD: `k8s/argocd/apps/myapp.yaml`
