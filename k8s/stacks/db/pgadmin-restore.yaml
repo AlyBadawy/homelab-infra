@@ -29,16 +29,6 @@ spec:
         app: pgadmin-restore
     spec:
       restartPolicy: Never
-      # Use a node that has access to the NAS mount
-      affinity:
-        nodeAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              preference:
-                matchExpressions:
-                  - key: kubernetes.io/hostname
-                    operator: In
-                    values: [] # Specify nodes with NAS access if needed
       containers:
         - name: restore
           image: alpine:3.19
