@@ -101,7 +101,7 @@ spec:
       volumes:
         - name: config
           persistentVolumeClaim:
-            claimName: nextcloud-data
+            claimName: nextcloud-data-lh
         - name: data
           hostPath:
             path: ${NAS_NEXTCLOUD_DATA}

@@ -116,10 +116,10 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: authentik-data
+            claimName: authentik-data-lh
         - name: templates
           persistentVolumeClaim:
-            claimName: authentik-templates
+            claimName: authentik-templates-lh
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -168,10 +168,10 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: authentik-data
+            claimName: authentik-data-lh
         - name: templates
           persistentVolumeClaim:
-            claimName: authentik-templates
+            claimName: authentik-templates-lh
 ---
 apiVersion: v1
 kind: Service

@@ -78,7 +78,7 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: pgadmin-data
+            claimName: pgadmin-data-lh
 ---
 apiVersion: v1
 kind: Service
