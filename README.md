@@ -127,9 +127,9 @@ Mounts NFS shares from your NAS:
 vars:
   nas_ip: "172.20.20.1" # Your NAS IP
   nfs_mounts:
-    - nfs_path: "/var/nfs/homelab"
+    - nfs_path: "/var/nfs/shared/homelab"
       mount_point: "/mnt/nas/homelab"
-    - nfs_path: "/var/nfs/immich"
+    - nfs_path: "/var/nfs/shared/immich"
       mount_point: "/mnt/nas/immich"
     # Add more as needed
 ```
@@ -425,12 +425,14 @@ Pre-creates PersistentVolumeClaims and automatically restores backups if availab
 - Waits for Longhorn volumes to restore (if restoring from backup)
 
 **Why pre-create?**
+
 - ArgoCD can immediately deploy applications to existing PVCs
 - Backups are restored BEFORE applications start, so databases have real data
 - No manual restoration steps needed - it's automatic in the deployment pipeline
 - Works seamlessly for both fresh installs (empty) and restores (with data)
 
 **Safety Design:**
+
 - This playbook is **designed for fresh installations only** (no PVCs exist yet)
 - If PVCs already exist, the playbook **fails fast** with clear instructions
 - This prevents issues with ArgoCD finalizers, Longhorn state, and other lifecycle management
@@ -458,6 +460,7 @@ ansible-playbook -i ansible/inventory.ini ansible/pre-create-pvcs.yml
 ```
 
 **What it does:**
+
 1. Checks that NO PVCs already exist (fails if any are found)
 2. Discovers backups on NAS at `/mnt/nas/backups/k3s-longhorn/backupstore/volumes/`
 3. For each backup found:

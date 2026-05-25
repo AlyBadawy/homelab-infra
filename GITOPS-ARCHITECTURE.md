@@ -95,6 +95,7 @@ k8s/
 Before ArgoCD can sync, three things must be in place (handled by `ansible/apply-secrets.yml`):
 
 **A. Kubernetes Secrets** — Created from `/mnt/nas/homelab/secrets.yaml`:
+
 ```yaml
 secrets:
   - name: postgres-secret
@@ -118,6 +119,7 @@ secrets:
 ```
 
 **B. cluster-vars ConfigMap** — Created in `argocd` namespace:
+
 ```yaml
 apiVersion: v1
 kind: ConfigMap
@@ -135,13 +137,14 @@ data:
   PROMETHEUS_HOST: "prometheus.in.alybadawy.com"
   NAS_IP: "172.20.20.2"
   NAS_BASE_EXPORT: "/var/nfs"
-  NAS_NEXTCLOUD_DATA: "/var/nfs/nextcloud"
-  NAS_IMMICH_DATA: "/var/nfs/immich"
+  NAS_NEXTCLOUD_DATA: "/var/nfs/shared/nextcloud"
+  NAS_IMMICH_DATA: "/var/nfs/shared/immich"
   TIMEZONE: "UTC"
   WILDCARD_SECRET: "wildcard-in-alybadawy-com"
 ```
 
 **C. Longhorn Volumes** (if restoring from backups) — Restored via `ansible/restore-longhorn-volumes.yml`:
+
 ```yaml
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -171,23 +174,24 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: ${GITHUB_REPO}                    # Substituted from cluster-vars ConfigMap
+    repoURL: ${GITHUB_REPO} # Substituted from cluster-vars ConfigMap
     targetRevision: main
-    path: k8s/argocd/apps                       # All Application CRDs
+    path: k8s/argocd/apps # All Application CRDs
     plugin:
-      name: kustomize-envsubst                  # Uses CMP plugin for variable substitution
+      name: kustomize-envsubst # Uses CMP plugin for variable substitution
   destination:
-    server: https://kubernetes.default.svc      # This cluster
+    server: https://kubernetes.default.svc # This cluster
     namespace: argocd
   syncPolicy:
     automated:
-      prune: true                               # Delete resources removed from git
-      selfHeal: true                            # Resync if cluster diverges
+      prune: true # Delete resources removed from git
+      selfHeal: true # Resync if cluster diverges
     syncOptions:
-      - CreateNamespace=true                    # Auto-create namespaces
+      - CreateNamespace=true # Auto-create namespaces
 ```
 
 **How it works:**
+
 1. The root app reads `k8s/argocd/apps/kustomization.yaml`
 2. Kustomization lists all Applications (db.yaml, cloud.yaml, etc.)
 3. The `kustomize-envsubst` CMP plugin processes the Applications:
@@ -216,23 +220,24 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: ${GITHUB_REPO}                    # GitHub repo URL
-    targetRevision: main                        # Track main branch
-    path: k8s/stacks/db                         # Directory with kustomization.yaml
+    repoURL: ${GITHUB_REPO} # GitHub repo URL
+    targetRevision: main # Track main branch
+    path: k8s/stacks/db # Directory with kustomization.yaml
     plugin:
-      name: kustomize-envsubst                  # Apply variable substitution
+      name: kustomize-envsubst # Apply variable substitution
   destination:
     server: https://kubernetes.default.svc
-    namespace: db                               # Deploy to 'db' namespace
+    namespace: db # Deploy to 'db' namespace
   syncPolicy:
     automated:
-      prune: true                               # Remove resources no longer in git
-      selfHeal: true                            # Auto-resync if cluster drifts
+      prune: true # Remove resources no longer in git
+      selfHeal: true # Auto-resync if cluster drifts
     syncOptions:
-      - CreateNamespace=true                    # Auto-create 'db' namespace
+      - CreateNamespace=true # Auto-create 'db' namespace
 ```
 
 **When synced, this Application:**
+
 1. Clones the Git repo
 2. Reads `k8s/stacks/db/kustomization.yaml`
 3. Runs the kustomize-envsubst CMP plugin:
@@ -272,6 +277,7 @@ data:
 **How substitution works:**
 
 1. **Source:** `k8s/stacks/db/postgres.yaml`
+
    ```yaml
    env:
      - name: TZ
@@ -288,6 +294,7 @@ data:
    ```
 
 **All substitutable variables** (from cluster-vars ConfigMap):
+
 - `${DOMAIN}` → Domain name
 - `${GITHUB_REPO}` → Repository URL
 - `${TIMEZONE}` → Timezone for applications
@@ -340,10 +347,10 @@ spec:
       image: ghcr.io/immich-app/postgres:14-vectorchord...
       envFrom:
         - secretRef:
-            name: postgres-secret                # References secret from apply-secrets.yml
+            name: postgres-secret # References secret from apply-secrets.yml
       env:
         - name: TZ
-          value: ${TIMEZONE}                     # Substituted by CMP
+          value: ${TIMEZONE} # Substituted by CMP
 ```
 
 **Example: `k8s/stacks/db/ingress.yaml`**
@@ -358,7 +365,7 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - ${PGADMIN_HOST}                       # Substituted → pgadmin.in.alybadawy.com
+        - ${PGADMIN_HOST} # Substituted → pgadmin.in.alybadawy.com
   rules:
     - host: ${PGADMIN_HOST}
       http:
@@ -386,20 +393,20 @@ metadata:
   name: infra-ingress-nginx
   namespace: argocd
   annotations:
-    argocd.argoproj.io/sync-wave: "0"           # Deploy in wave 0 (first)
+    argocd.argoproj.io/sync-wave: "0" # Deploy in wave 0 (first)
 spec:
   sources:
     # Source 1: Helm chart from upstream repo
     - repoURL: https://kubernetes.github.io/ingress-nginx
       chart: ingress-nginx
-      targetRevision: "*"                        # Latest version
+      targetRevision: "*" # Latest version
       helm:
         releaseName: ingress-nginx
         valueFiles:
           - $values/k8s/infrastructure/ingress-nginx/helm-values.yaml
         parameters:
           - name: controller.extraArgs.default-ssl-certificate
-            value: "ingress-nginx/${WILDCARD_SECRET}"    # Substituted by CMP
+            value: "ingress-nginx/${WILDCARD_SECRET}" # Substituted by CMP
     # Source 2: Git repo (for values source reference)
     - repoURL: ${GITHUB_REPO}
       targetRevision: main
@@ -414,6 +421,7 @@ spec:
 ```
 
 **How this works:**
+
 1. Fetches Helm chart `ingress-nginx` from upstream repo
 2. Merges helm-values.yaml and helm parameters
 3. CMP substitutes `${WILDCARD_SECRET}` before rendering
@@ -447,6 +455,7 @@ backup              → Backup CronJobs (needs all services ready)
 ```
 
 **Order ensures:**
+
 1. Ingress controller is ready before Ingress resources
 2. Storage is ready before PVC-dependent apps
 3. Databases are ready before apps that depend on them
@@ -490,17 +499,20 @@ kubectl apply -f k8s/argocd/root-app.yaml
 ### Step 3: ArgoCD Syncs All Applications
 
 **Wave -1:**
+
 ```
 root → Syncs all Applications from k8s/argocd/apps/
 ```
 
 **Wave 0:**
+
 ```
 infra-ingress-nginx → Deploys nginx-ingress controller
 infra-longhorn      → Deploys Longhorn distributed storage
 ```
 
 **Wave 1:**
+
 ```
 db                → PostgreSQL, Redis, PgAdmin
 infra-monitor     → Prometheus, Grafana
@@ -508,6 +520,7 @@ infra-longhorn-config → Longhorn backup jobs
 ```
 
 **Wave 2:**
+
 ```
 auth      → Authentik (uses db, ingress)
 cloud     → Nextcloud (uses db, storage, ingress)
@@ -521,20 +534,22 @@ backup    → CronJob backups
 After initial sync, ArgoCD continuously monitors:
 
 1. **Git Repository** — Every commit triggers a sync
+
    ```bash
    # Change something in git
    git commit -am "Update Nextcloud memory limits"
    git push
-   
+
    # ArgoCD detects the change
    # Syncs the updated manifests to the cluster
    ```
 
 2. **Cluster State** — If someone manually changes the cluster
+
    ```bash
    # Manual change (not recommended)
    kubectl patch deployment nextcloud -n cloud --patch '{"spec":{"replicas":2}}'
-   
+
    # ArgoCD detects drift
    # With selfHeal: true, automatically reverts to git state
    ```
@@ -558,7 +573,7 @@ After initial sync, ArgoCD continuously monitors:
   ```yaml
   envFrom:
     - secretRef:
-        name: postgres-secret  # References secret created by apply-secrets.yml
+        name: postgres-secret # References secret created by apply-secrets.yml
   ```
 
 ### Variable Substitution
@@ -582,12 +597,14 @@ After initial sync, ArgoCD continuously monitors:
 To deploy a new application, follow this workflow:
 
 ### 1. Create Stack Directory
+
 ```bash
 mkdir -p k8s/stacks/myapp
 cd k8s/stacks/myapp
 ```
 
 ### 2. Create Application Manifests
+
 ```bash
 # deployment.yaml, service.yaml, ingress.yaml, etc.
 cat > kustomization.yaml << EOF
@@ -601,6 +618,7 @@ EOF
 ```
 
 ### 3. Use Variables in Manifests
+
 ```yaml
 # ingress.yaml
 spec:
@@ -612,6 +630,7 @@ spec:
 ```
 
 ### 4. Create Application CRD
+
 ```bash
 cat > k8s/argocd/apps/myapp.yaml << EOF
 apiVersion: argoproj.io/v1alpha1
@@ -640,6 +659,7 @@ EOF
 ```
 
 ### 5. Register Application
+
 ```bash
 # Edit k8s/argocd/apps/kustomization.yaml
 # Add to resources:
@@ -652,6 +672,7 @@ git push
 ```
 
 ### 6. ArgoCD Syncs Automatically
+
 ```bash
 # ArgoCD detects the new Application
 # Syncs k8s/stacks/myapp/ to the cluster
@@ -663,6 +684,7 @@ git push
 ## Making Changes
 
 ### Update an Application
+
 ```bash
 # Edit the manifest
 vim k8s/stacks/db/postgres.yaml
@@ -679,6 +701,7 @@ argocd app sync db  # Force immediate sync (optional)
 ```
 
 ### Update ArgoCD Configuration
+
 ```bash
 # Edit the Helm values or CMP configuration
 vim k8s/argocd/helm-values.yaml
@@ -688,6 +711,7 @@ vim k8s/argocd/helm-values.yaml
 ```
 
 ### Update a Helm Chart Version
+
 ```bash
 # Edit the Application CRD
 vim k8s/argocd/apps/infra-longhorn.yaml
@@ -705,12 +729,14 @@ git push
 ## Troubleshooting
 
 ### Check Application Status
+
 ```bash
 kubectl get applications -n argocd -o wide
 kubectl describe application db -n argocd
 ```
 
 ### Check Sync Status
+
 ```bash
 argocd app list
 argocd app status db
@@ -718,12 +744,14 @@ argocd app sync db --force
 ```
 
 ### View CMP Plugin Logs
+
 ```bash
 # CMP runs as a sidecar in argocd-repo-server
 kubectl logs -n argocd -c kustomize-envsubst deployment/argocd-repo-server
 ```
 
 ### Test Variable Substitution
+
 ```bash
 # Manually test the CMP plugin
 cd k8s/stacks/db
@@ -731,6 +759,7 @@ kustomize build . | awk '{result=""; line=$0; while(match(line,/\$[{][A-Za-z_][A
 ```
 
 ### ArgoCD UI Access
+
 ```bash
 # Forward ArgoCD web UI
 kubectl port-forward -n argocd svc/argocd-server 8080:443
@@ -763,4 +792,3 @@ Your GitOps setup is a **three-tier system**:
    - Continuous drift detection & auto-healing
 
 **Everything is in git.** Every change, every configuration, every application deployment goes through the repository. This enables disaster recovery, environment reproducibility, and a complete audit trail of infrastructure changes.
-
