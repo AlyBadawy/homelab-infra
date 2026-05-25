@@ -1,0 +1,177 @@
+- name: Install k3s, Helm, and Longhorn
+  hosts: homelab
+
+  vars:
+    k3s_version: "" # Leave empty for latest, or set to specific version (e.g., "v1.28.0")
+    helm_version: "" # Leave empty for latest, or set to specific version (e.g., "v3.13.0")
+    longhorn_version: "" # Leave empty for latest, or set to specific version (e.g., "1.5.0")
+    longhorn_namespace: "longhorn-system"
+
+  tasks:
+    # ────────────────────────────────────────────────────────────────────────────
+    # Install k3s
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Check if k3s is already installed
+      stat:
+        path: /usr/local/bin/k3s
+      register: k3s_installed
+
+    - name: Test connectivity to k3s repository
+      command: curl -I https://get.k3s.io
+      register: k3s_repo_check
+      failed_when: false
+      changed_when: false
+
+    - name: Install k3s
+      become: true
+      shell: |
+        curl -sfL https://get.k3s.io | sh -s - \
+          --disable traefik
+      when: not k3s_installed.stat.exists
+      environment:
+        INSTALL_K3S_VERSION: "{{ k3s_version if k3s_version else '' }}"
+      register: k3s_install
+      failed_when: k3s_install.rc != 0
+
+    - name: Wait for k3s to be ready
+      become: true
+      command: kubectl get nodes
+      register: k3s_ready
+      until: k3s_ready.rc == 0
+      retries: 30
+      delay: 10
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+    - name: Get k3s kubeconfig
+      become: true
+      slurp:
+        src: /etc/rancher/k3s/k3s.yaml
+      register: k3s_kubeconfig
+
+    - name: Save kubeconfig to ansible control node
+      copy:
+        content: "{{ k3s_kubeconfig['content'] | b64decode }}"
+        dest: "{{ lookup('env', 'HOME') }}/.kube/k3s-config.yaml"
+        mode: "0600"
+      delegate_to: localhost
+      become: no
+      run_once: true
+
+    - name: Display kubeconfig location
+      debug:
+        msg: "kubeconfig saved to: {{ lookup('env', 'HOME') }}/.kube/k3s-config.yaml"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Install Helm
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Check if Helm is already installed
+      command: helm version
+      register: helm_installed
+      failed_when: false
+      changed_when: false
+
+    - name: Install Helm
+      become: true
+      shell: |
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      when: helm_installed.rc != 0
+      environment:
+        HELM_INSTALL_DIR: /usr/local/bin
+
+    - name: Verify Helm installation
+      command: helm version
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Install Longhorn
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Add Longhorn Helm repository
+      become: true
+      command: |
+        helm repo add longhorn https://charts.longhorn.io
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    - name: Update Helm repositories
+      become: true
+      command: helm repo update
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    - name: Create Longhorn namespace
+      become: true
+      shell: |
+        kubectl create namespace {{ longhorn_namespace }} --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+      failed_when: false
+
+    - name: Install Longhorn via Helm
+      become: true
+      shell: |
+        helm upgrade --install longhorn longhorn/longhorn \
+          --namespace {{ longhorn_namespace }} \
+          {% if longhorn_version %}--version {{ longhorn_version }}{% endif %}
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: longhorn_install
+      changed_when: "'deployed' in longhorn_install.stdout or 'upgraded' in longhorn_install.stdout"
+
+    - name: Wait for Longhorn pods to start
+      become: true
+      pause:
+        seconds: 15
+      changed_when: false
+
+    - name: Check Longhorn pods status
+      become: true
+      shell: |
+        kubectl get pods -n {{ longhorn_namespace }} -o wide
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: longhorn_pods
+      retries: 10
+      delay: 5
+      until: longhorn_pods.stdout is search('Running')
+      changed_when: false
+      failed_when: false
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Verification
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Get cluster nodes
+      become: true
+      command: kubectl get nodes -o wide
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: k3s_nodes
+      changed_when: false
+
+    - name: Display cluster nodes
+      debug:
+        msg: "{{ k3s_nodes.stdout }}"
+
+    - name: Get Longhorn status
+      become: true
+      command: kubectl get all -n {{ longhorn_namespace }}
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: longhorn_status
+      changed_when: false
+
+    - name: Display Longhorn status
+      debug:
+        msg: "{{ longhorn_status.stdout_lines }}"
+
+    - name: Summary
+      debug:
+        msg:
+          - "✓ k3s installed"
+          - "✓ Helm installed"
+          - "✓ Longhorn installed in namespace: {{ longhorn_namespace }}"

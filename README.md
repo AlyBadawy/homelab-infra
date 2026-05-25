@@ -125,6 +125,40 @@ vars:
 ansible-playbook -i ansible/inventory.ini ansible/nfs-mounts.yml
 ```
 
+### k3s.yml
+Installs k3s Kubernetes, Helm, and Longhorn storage:
+- Installs k3s **without Traefik** (nginx-ingress to be added later)
+- Installs Helm package manager
+- Installs Longhorn distributed storage (ready for persistent volumes)
+- Configures everything but no PVCs are created yet
+- Saves kubeconfig to your local machine
+
+**Versions (customizable):**
+```yaml
+vars:
+  k3s_version: "latest"        # Pin to specific version if needed
+  helm_version: "latest"
+  longhorn_version: "latest"
+```
+
+**Run:**
+```bash
+ansible-playbook -i ansible/inventory.ini ansible/k3s.yml
+```
+
+**After installation:**
+```bash
+# Set kubeconfig
+export KUBECONFIG=~/.kube/k3s-config.yaml
+
+# Verify cluster
+kubectl get nodes
+
+# Access Longhorn UI (if needed)
+kubectl port-forward -n longhorn-system svc/longhorn-frontend 8080:80
+# Then visit http://localhost:8080
+```
+
 ## Quick Start
 
 1. **Update the inventory** to match your server details:
@@ -185,11 +219,11 @@ When modifying playbooks:
 - [x] System dependencies (packages, NTP, iSCSI)
 - [x] Swap file configuration
 - [x] NFS mounts configuration
-- [ ] Docker installation and setup
-- [ ] Container registry configuration
-- [ ] Kubernetes/k3s setup
+- [x] Kubernetes/k3s + Helm + Longhorn
+- [ ] nginx-ingress installation
 - [ ] Monitoring stack (Prometheus, Grafana)
 - [ ] Backup automation
+- [ ] Container registry configuration
 - [ ] Network configuration
 
 ## Troubleshooting
