@@ -3,6 +3,7 @@ kind: Kustomization
 # List every Application CRD file here.
 # Adding a new app = add the file + one line here, then git push.
 resources:
+  - argocd-ingress.yaml
   - auth.yaml
   - backup.yaml
   - cloud.yaml

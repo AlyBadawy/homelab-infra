@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# This kustomization handles the ArgoCD Ingress resource.
+# The Application CRD files (root-app.yaml, etc.) are not included here
+# as they are managed by the bootstrap process, not by GitOps.
+resources:
+  - ingress.yaml
