@@ -177,6 +177,75 @@ kubectl get nodes
 **Why Longhorn isn't installed here:**
 Longhorn is installed by ArgoCD via the `infra-longhorn` Application (see `k8s/argocd/apps/`). This avoids Helm state conflicts and establishes a single source of truth (git) for Longhorn configuration.
 
+### fresh-install.sh
+
+Automated orchestration script that runs all playbooks in the correct order for a complete infrastructure deployment:
+
+**Execution Order:**
+1. bootstrap.yml — System bootstrap
+2. dependencies.yml — Install required packages
+3. swap.yml — Configure 12GB swap
+4. nfs-mounts.yml — Mount NAS shares
+5. k3s.yml — Install Kubernetes + Helm
+6. acme-cert.yml — Generate wildcard TLS certificate
+7. apply-secrets.yml — Apply Kubernetes secrets and ConfigMaps
+8. longhorn-bootstrap.yml — Install Longhorn storage (manual Helm, not ArgoCD)
+9. pre-create-pvcs.yml — Restore backups OR create empty PVCs
+10. argocd-bootstrap.yml — Bootstrap ArgoCD (GitOps takes over)
+
+**Run:**
+
+```bash
+./fresh-install.sh
+```
+
+The script prompts for:
+- Vercel API token (for ACME wildcard certificate)
+- GitHub repo URL (for manifests)
+- ACME email address
+- NAS paths for Nextcloud, Immich, and backups
+
+**Backup Restoration Issue:**
+
+During fresh install, `pre-create-pvcs.yml` attempts to restore Longhorn volume backups from `/mnt/nas/backups/k3s-longhorn/backupstore/volumes`. If restores are skipped:
+
+1. **Check NAS mount status:**
+   ```bash
+   mount | grep nas
+   ```
+
+2. **Verify backup directory exists:**
+   ```bash
+   ls -la /mnt/nas/backups/k3s-longhorn/backupstore/volumes/
+   ```
+
+3. **Check Longhorn backup-target Setting:**
+   ```bash
+   kubectl get setting backup-target -n longhorn-system -o jsonpath='{.value}'
+   ```
+
+4. **Known issue — Backup metadata overwrites backup-target:**
+   If you're restoring from old backups, the backup metadata may contain an incorrect NAS path (e.g., `/var/nfs/backups` instead of `/var/nfs/shared/backups`). When Longhorn loads this metadata, it overwrites the correct backup-target Setting.
+   
+   **Symptoms:**
+   - `available_backups.stdout_lines` shows `NO_BACKUPS`
+   - But backup files exist in the directory
+   - Longhorn backup-target Setting points to wrong path
+   
+   **Workaround:**
+   The `longhorn-bootstrap.yml` playbook sets the correct backup-target, but if old backup metadata overwrites it, you may need to:
+   ```bash
+   # Re-patch the backup-target Setting
+   kubectl patch setting backup-target -n longhorn-system \
+     --type merge \
+     -p '{"value":"nfs://172.20.20.2:/var/nfs/shared/backups/k3s-longhorn?nfsOptions=nfsvers%3D3%2Cnolock"}'
+   ```
+
+5. **If backups don't restore automatically:**
+   - Empty PVCs are created instead
+   - Applications will initialize with fresh databases
+   - You can manually restore backups later (see `longhorn-restore.yml`)
+
 ### longhorn-restore.yml
 
 Discovers Longhorn volume backups and provides guided restore instructions:

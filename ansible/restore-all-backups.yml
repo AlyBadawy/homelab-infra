@@ -1,0 +1,133 @@
+- name: Restore all Longhorn backups
+  hosts: homelab
+
+  vars:
+    kubeconfig_path: "/etc/rancher/k3s/k3s.yaml"
+
+  tasks:
+    # ────────────────────────────────────────────────────────────────────────────
+    # Discover Longhorn backups
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Discover Longhorn backups from backup store
+      become: true
+      shell: |
+        kubectl get backups.longhorn.io -n longhorn-system -o json
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: longhorn_backups_json
+      changed_when: false
+
+    - name: Parse Longhorn backups
+      set_fact:
+        longhorn_backups: "{{ longhorn_backups_json.stdout | from_json | json_query('items[*].metadata.name') }}"
+
+    - name: Display discovered Longhorn backups
+      debug:
+        msg: |
+          Discovered {{ longhorn_backups | length }} Longhorn backup(s):
+          {% for backup in longhorn_backups %}
+          - {{ backup }}
+          {% endfor %}
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Create namespaces for backups
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Create required namespaces
+      become: true
+      shell: |
+        kubectl create namespace "{{ item }}" --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      loop:
+        - db
+        - auth
+        - cloud
+        - immich
+        - monitor
+      changed_when: false
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Restore Longhorn native backups
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Restore Longhorn backups to volumes
+      block:
+        - name: Create Longhorn Volume from backup
+          become: true
+          shell: |
+            cat << EOF | kubectl apply -f -
+            apiVersion: longhorn.io/v1beta1
+            kind: Volume
+            metadata:
+              name: {{ item }}
+              namespace: longhorn-system
+            spec:
+              size: 0
+              numberOfReplicas: 1
+              fromBackup: "{{ item }}"
+            EOF
+          environment:
+            KUBECONFIG: "{{ kubeconfig_path }}"
+          loop: "{{ longhorn_backups }}"
+          register: volume_creation
+          changed_when: "'created' in volume_creation.stdout.lower()"
+          failed_when: false
+
+        - name: Wait for Longhorn volumes to be attached
+          become: true
+          shell: |
+            kubectl get volume {{ item }} -n longhorn-system -o jsonpath='{.status.state}'
+          environment:
+            KUBECONFIG: "{{ kubeconfig_path }}"
+          register: volume_state
+          until: volume_state.stdout == "attached"
+          retries: 60
+          delay: 10
+          loop: "{{ longhorn_backups }}"
+          changed_when: false
+
+        - name: Display restored Longhorn volumes
+          debug:
+            msg: |
+              ✓ Restored {{ longhorn_backups | length }} Longhorn volume(s)
+
+      when: longhorn_backups | length > 0
+
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # List all restored volumes
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: List all Longhorn volumes
+      become: true
+      shell: |
+        kubectl get volumes.longhorn.io -n longhorn-system -o custom-columns=NAME:.metadata.name,STATE:.status.state,SIZE:.spec.size
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: volumes_list
+      changed_when: false
+
+    - name: Display all Longhorn volumes
+      debug:
+        msg: "{{ volumes_list.stdout }}"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Summary
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Summary
+      debug:
+        msg: |
+          ═══════════════════════════════════════════════════════════════
+          Longhorn Backup Restoration Complete
+          ═══════════════════════════════════════════════════════════════
+
+          ✓ Restored {{ longhorn_backups | length }} Longhorn volume(s):
+          {% for backup in longhorn_backups %}
+          - {{ backup }}
+          {% endfor %}
+
+          All volumes are now attached and ready for binding to PVCs.
+
+          Next Step:
+          Create PVCs that bind to the restored volumes:
+            ansible-playbook -i ansible/inventory.ini ansible/create-pvcs-from-volumes.yml
+
+          ═══════════════════════════════════════════════════════════════

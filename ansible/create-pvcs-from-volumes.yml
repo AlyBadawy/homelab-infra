@@ -1,0 +1,148 @@
+- name: Create PVCs from restored Longhorn volumes
+  hosts: homelab
+
+  vars:
+    kubeconfig_path: "/etc/rancher/k3s/k3s.yaml"
+
+  tasks:
+    # ────────────────────────────────────────────────────────────────────────────
+    # Discover restored volumes
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Get all Longhorn volumes
+      become: true
+      shell: |
+        kubectl get volumes.longhorn.io -n longhorn-system -o json
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: volumes_json
+      changed_when: false
+
+    - name: Parse volumes and map to namespaces
+      set_fact:
+        volumes_to_bind: |
+          [
+            {% set volume_namespace_map = {
+              'postgres-data-lh': 'db',
+              'pgadmin-data-lh': 'db',
+              'authentik-data-lh': 'auth',
+              'authentik-templates': 'auth',
+              'nextcloud-data-lh': 'cloud',
+              'immich-data': 'immich',
+              'immich-model-cache': 'immich',
+              'prometheus-grafana-lh': 'monitor',
+              'prometheus-prometheus-kube-prometheus-prometheus-db-prometheus-prometheus-kube-prometheus-prometheus-0': 'monitor',
+              'redis-data-lh': 'db'
+            } %}
+            {% for vol in (volumes_json.stdout | from_json).items %}
+            {% set vol_name = vol.metadata.name %}
+            {% set namespace = volume_namespace_map.get(vol_name, 'default') %}
+            {
+              "name": "{{ vol_name }}",
+              "namespace": "{{ namespace }}",
+              "size": {{ vol.spec.size | default(0) }}
+            }{{ "," if not loop.last else "" }}
+            {% endfor %}
+          ]
+
+    - name: Display volumes to bind
+      debug:
+        msg: |
+          Will create PVCs for {{ volumes_to_bind | length }} volume(s):
+          {% for vol in volumes_to_bind %}
+          - {{ vol.name }} in namespace {{ vol.namespace }} ({{ vol.size / 1073741824 | int }}Gi)
+          {% endfor %}
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Create namespaces
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Create required namespaces
+      become: true
+      shell: |
+        kubectl create namespace "{{ item }}" --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      loop:
+        - db
+        - auth
+        - cloud
+        - immich
+        - monitor
+      changed_when: false
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Create PVCs bound to volumes
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Create PVCs from restored volumes
+      become: true
+      shell: |
+        cat << EOF | kubectl apply -f -
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: {{ item.name }}
+          namespace: {{ item.namespace }}
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          storageClassName: longhorn
+          resources:
+            requests:
+              storage: {{ (item.size / 1073741824) | int }}Gi
+          selector:
+            matchLabels:
+              longhornvolume: {{ item.name }}
+        EOF
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      loop: "{{ volumes_to_bind }}"
+      register: pvc_creation
+      changed_when: "'created' in pvc_creation.stdout.lower() or 'configured' in pvc_creation.stdout.lower()"
+      failed_when: false
+
+    - name: Display PVC creation results
+      debug:
+        msg: "{{ pvc_creation.results | map(attribute='stdout') | list }}"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Verify PVCs are bound
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: List all PVCs
+      become: true
+      shell: |
+        kubectl get pvc -A
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: pvc_list
+      changed_when: false
+
+    - name: Display all PVCs
+      debug:
+        msg: "{{ pvc_list.stdout }}"
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # Summary
+    # ────────────────────────────────────────────────────────────────────────────
+    - name: Summary
+      debug:
+        msg: |
+          ═══════════════════════════════════════════════════════════════
+          PVC Binding Complete
+          ═══════════════════════════════════════════════════════════════
+
+          ✓ Created {{ volumes_to_bind | length }} PVC(s) bound to restored volumes
+
+          PVCs are now ready for applications to use:
+          {% for vol in volumes_to_bind %}
+          - {{ vol.namespace }}/{{ vol.name }}
+          {% endfor %}
+
+          Next Steps:
+          1. Verify all PVCs are in Bound status:
+             kubectl get pvc -A
+
+          2. Deploy applications via ArgoCD:
+             ansible-playbook -i ansible/inventory.ini ansible/argocd-bootstrap.yml
+
+          3. Applications will automatically mount their PVCs and start
+
+          ═══════════════════════════════════════════════════════════════

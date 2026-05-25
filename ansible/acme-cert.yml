@@ -180,7 +180,7 @@
       set_fact:
         need_issuance: "{{ not cert_valid | default(false) or not acme_domain_dir.stat.exists }}"
 
-    - name: Issue wildcard certificate
+    - name: Issue wildcard certificate (may fail due to rate limit)
       shell: |
         export VERCEL_TOKEN="{{ vercel_api_token }}"
         {{ acme_home }}/acme.sh --issue \
@@ -192,7 +192,7 @@
         KUBECONFIG: "{{ kubeconfig_path }}"
       register: acme_issue
       when: need_issuance
-      failed_when: acme_issue.rc not in [0, 2]
+      failed_when: false
       changed_when: "'Cert success' in acme_issue.stdout"
 
     - name: Display certificate issuance result

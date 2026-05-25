@@ -26,7 +26,8 @@
       become: true
       shell: |
         curl -sfL https://get.k3s.io | sh -s - \
-          --disable traefik
+          --disable traefik \
+          --write-kubeconfig-mode 644
       when: not k3s_installed.stat.exists
       environment:
         INSTALL_K3S_VERSION: "{{ k3s_version if k3s_version else '' }}"
@@ -94,20 +95,45 @@
         state: directory
         mode: "0700"
 
-    - name: Copy kubeconfig to user home
+    - name: Fix k3s kubeconfig permissions
       become: true
+      file:
+        path: /etc/rancher/k3s/k3s.yaml
+        mode: "0644"
+
+    - name: Copy kubeconfig to user home (without sudo)
+      become: true
+      become_user: "{{ ansible_user }}"
+      copy:
+        src: /etc/rancher/k3s/k3s.yaml
+        dest: "~/.kube/config"
+        mode: "0600"
+        remote_src: yes
+
+    - name: Add KUBECONFIG to shell profile
+      become: true
+      become_user: "{{ ansible_user }}"
+      lineinfile:
+        path: "~/.bashrc"
+        line: "export KUBECONFIG=$HOME/.kube/config"
+        regexp: "^export KUBECONFIG"
+        state: present
+
+    - name: Verify kubectl works without sudo
+      become: true
+      become_user: "{{ ansible_user }}"
       shell: |
-        cp /etc/rancher/k3s/k3s.yaml {{ ansible_facts['env']['HOME'] }}/.kube/config
-        chown $(id -u):$(id -g) {{ ansible_facts['env']['HOME'] }}/.kube/config
-        chmod 600 {{ ansible_facts['env']['HOME'] }}/.kube/config
-      environment:
-        HOME: "{{ ansible_facts['env']['HOME'] }}"
-      register: kubeconfig_copy
+        export KUBECONFIG=$HOME/.kube/config
+        kubectl get nodes
       changed_when: false
 
-    - name: Display kubeconfig location
+    - name: Display kubeconfig ready
       debug:
-        msg: "kubeconfig ready at {{ ansible_facts['env']['HOME'] }}/.kube/config"
+        msg: |
+          ✓ kubectl is ready without sudo
+          ✓ kubeconfig: ~/.kube/config
+          ✓ KUBECONFIG env var added to ~/.bashrc
+          Run: source ~/.bashrc (or login again)
 
     # ────────────────────────────────────────────────────────────────────────────
     # Configure Helm repositories
