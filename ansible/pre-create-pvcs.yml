@@ -8,6 +8,7 @@
     backup_store_path: "/mnt/nas/backups/k3s-longhorn/backupstore/volumes"
     kubeconfig_path: "/etc/rancher/k3s/k3s.yaml"
     pvc_files:
+      # Critical data stores - pre-created for backup restore or fresh install
       - path: "k8s/stacks/db/postgres.yaml"
         namespace: "db"
         backup_name: "postgres-data-lh"
@@ -24,14 +25,8 @@
         namespace: "cloud"
         backup_name: "nextcloud-data-lh"
         size: 10737418240  # 10Gi
-      - path: "k8s/stacks/immich/immich-ml.yaml"
-        namespace: "immich"
-        backup_name: "immich-model-cache"
-        size: 5368709120  # 5Gi
-      - path: "k8s/stacks/monitor/longhorn-pvcs.yaml"
-        namespace: "monitor"
-        backup_name: "prometheus-grafana-lh"
-        size: 5368709120  # 5Gi
+      # NOTE: immich-model-cache and prometheus-grafana-lh are created by ArgoCD
+      # They are ephemeral/application-managed and should NOT be pre-created here
 
   pre_tasks:
     - name: Display mode (restore or fresh)

@@ -143,23 +143,47 @@
         msg: "✓ Longhorn manager (DaemonSet) and UI (Deployment) are ready"
 
     # ────────────────────────────────────────────────────────────────────────────
-    # Patch Longhorn backup-target Setting CRD
+    # Patch Longhorn backup-target Setting CRD (idempotent + always verify)
     # ────────────────────────────────────────────────────────────────────────────
-    - name: Patch Longhorn backup-target setting
+    - name: Set correct Longhorn backup-target setting
       become: true
       shell: |
         BACKUP_TARGET="nfs://{{ nas_ip }}:{{ nas_base_export }}/{{ longhorn_backup_path }}?nfsOptions=nfsvers%3D3%2Cnolock"
         kubectl patch setting backup-target -n {{ longhorn_namespace }} \
           --type merge \
-          -p "{\"value\":\"${BACKUP_TARGET}\"}" 2>/dev/null || true
+          -p "{\"value\":\"${BACKUP_TARGET}\"}"
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       register: backup_patch
+      failed_when: false
+      changed_when: "'patched' in backup_patch.stdout.lower() or 'configured' in backup_patch.stdout.lower()"
+
+    - name: Verify backup-target is set correctly
+      become: true
+      shell: |
+        kubectl get setting backup-target -n {{ longhorn_namespace }} -o jsonpath='{.value}'
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: backup_target_value
       changed_when: false
 
-    - name: Display backup-target patched
+    - name: Fail if backup-target is incorrect
+      fail:
+        msg: |
+          ERROR: Longhorn backup-target is set to an incorrect value!
+          Expected: nfs://{{ nas_ip }}:{{ nas_base_export }}/{{ longhorn_backup_path }}?nfsOptions=nfsvers%3D3%2Cnolock
+          Actual:   {{ backup_target_value.stdout }}
+
+          This may have been restored from a backup with the wrong configuration.
+          Fix it manually:
+            kubectl patch setting backup-target -n longhorn-system \
+              -p '{"value":"nfs://{{ nas_ip }}:{{ nas_base_export }}/{{ longhorn_backup_path }}?nfsOptions=nfsvers%3D3%2Cnolock"}' \
+              --type merge
+      when: "nas_base_export not in backup_target_value.stdout"
+
+    - name: Display backup-target configured correctly
       debug:
-        msg: "✓ Longhorn backup-target Setting CRD patched"
+        msg: "✓ Longhorn backup-target verified: {{ backup_target_value.stdout }}"
 
     # ────────────────────────────────────────────────────────────────────────────
     # Wait for backup target to become healthy

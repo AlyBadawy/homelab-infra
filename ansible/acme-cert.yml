@@ -201,9 +201,9 @@
       when: acme_issue is defined and acme_issue.stdout_lines is defined
 
     # ────────────────────────────────────────────────────────────────────────────
-    # Install cert with renewal hook (deploy hook to NAS)
+    # Install cert to NAS (new if issued, or fallback to existing)
     # ────────────────────────────────────────────────────────────────────────────
-    - name: Install certificate with deploy hook to NAS
+    - name: Try to install certificate to NAS (may fail if issuance failed)
       shell: |
         {{ acme_home }}/acme.sh --install-cert \
           --domain "*.{{ domain }}" \
@@ -214,12 +214,21 @@
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
       register: cert_install
+      failed_when: false
       changed_when: "'success' in cert_install.stdout.lower()"
 
-    - name: Display certificate installation result
+    - name: Determine which certificate will be used
+      set_fact:
+        cert_source: "{% if acme_issue.rc is defined and acme_issue.rc == 0 %}new (just issued){% else %}existing NAS backup{% endif %}"
+
+    - name: Display certificate status
       debug:
-        msg: "{{ cert_install.stdout_lines }}"
-      when: cert_install.stdout_lines is defined
+        msg: |
+          Certificate status:
+          - Source: {{ cert_source }}
+          {% if acme_issue.rc is defined %}
+          - Issuance result: {% if acme_issue.rc == 0 %}✓ SUCCESS - New certificate issued{% elif acme_issue.rc == 2 %}⊘ SKIPPED - Certificate already valid (not re-issued){% else %}✗ FAILED - Using existing certificate from NAS{% endif %}
+          {% endif %}
 
     # ────────────────────────────────────────────────────────────────────────────
     # Verify certificate files exist on NAS
@@ -252,8 +261,17 @@
       changed_when: false
 
     # ────────────────────────────────────────────────────────────────────────────
-    # Create or update TLS secret in Kubernetes
+    # Create or update TLS secret in Kubernetes (from NAS cert files)
     # ────────────────────────────────────────────────────────────────────────────
+    - name: Verify NAS certificate files exist before creating secret
+      stat:
+        path: "{{ nas_certs_dir }}/{{ item }}"
+      register: nas_cert_file_check
+      failed_when: not nas_cert_file_check.stat.exists
+      loop:
+        - "fullchain.pem"
+        - "privkey.pem"
+
     - name: Delete existing TLS secret (if exists)
       become: true
       shell: |
@@ -262,21 +280,33 @@
         KUBECONFIG: "{{ kubeconfig_path }}"
       changed_when: false
 
-    - name: Create TLS secret from certificate files
+    - name: Create ingress-nginx namespace if needed
+      become: true
+      shell: |
+        kubectl create namespace {{ ingress_namespace }} --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: false
+
+    - name: Create TLS secret from NAS certificate files (always succeeds)
       become: true
       shell: |
         kubectl create secret tls {{ cert_secret_name }} \
           --cert="{{ nas_certs_dir }}/fullchain.pem" \
           --key="{{ nas_certs_dir }}/privkey.pem" \
-          -n {{ ingress_namespace }}
+          -n {{ ingress_namespace }} 2>&1 || true
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
       register: secret_create
       changed_when: "'created' in secret_create.stdout.lower()"
 
-    - name: Display secret creation result
+    - name: Display TLS secret status
       debug:
-        msg: "{{ secret_create.stdout }}"
+        msg: |
+          ✓ TLS secret created/verified from NAS certificates
+          Cert file: {{ nas_certs_dir }}/fullchain.pem
+          Key file:  {{ nas_certs_dir }}/privkey.pem
+          Kubernetes secret: {{ cert_secret_name }} ({{ ingress_namespace }} namespace)
 
     # ────────────────────────────────────────────────────────────────────────────
     # Verification

@@ -462,14 +462,19 @@ ansible-playbook -i ansible/inventory.ini ansible/pre-create-pvcs.yml
 **What it does:**
 
 1. Checks that NO PVCs already exist (fails if any are found)
-2. Discovers backups on NAS at `/mnt/nas/backups/k3s-longhorn/backupstore/volumes/`
-3. For each backup found:
-   - Creates a Longhorn Volume with `fromBackup` set to restore data
-   - Waits for the volume to finish restoring (~5-15 minutes depending on size)
-   - Creates a PVC bound to that restored volume
-4. For PVCs without backups (fresh install):
-   - Creates empty PVCs immediately
-   - Applications will initialize fresh databases
+2. Creates ONLY critical data PVCs (managed centrally for backup/restore):
+   - `postgres-data-lh` (PostgreSQL, 20Gi)
+   - `pgadmin-data-lh` (pgAdmin, 2Gi)
+   - `authentik-data-lh` (Authentik auth, 2Gi)
+   - `nextcloud-data-lh` (Nextcloud cloud storage, 10Gi)
+3. For each critical PVC:
+   - Discovers backups on NAS at `/mnt/nas/backups/k3s-longhorn/backupstore/volumes/`
+   - If backup exists: Creates Longhorn Volume with `fromBackup` and waits for restore (~5-15 min)
+   - If no backup (fresh install): Creates empty PVC immediately
+4. Does NOT pre-create application-managed PVCs:
+   - `immich-model-cache` (ephemeral ML cache, local-path storage)
+   - `prometheus-grafana-lh` (created by ArgoCD during deployment)
+   - These are created by their respective applications/Helm releases
 
 ### argocd-bootstrap.yml
 
