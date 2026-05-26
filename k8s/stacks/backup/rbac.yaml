@@ -8,6 +8,15 @@ metadata:
     homelab/stack: backup
 
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: secrets-backup-sa
+  namespace: backup
+  labels:
+    homelab/stack: backup
+
+---
 # Cluster-wide role: allows the backup CronJob to scale Deployments,
 # manage sub-Jobs, and watch Pods across db / auth / cloud / monitor.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -48,4 +57,34 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: pvc-backup
+    namespace: backup
+
+---
+# Secrets backup ClusterRole — read-only access to all secrets
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: secrets-backup
+  labels:
+    homelab/stack: backup
+rules:
+  # Read all secrets across all namespaces
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: secrets-backup
+  labels:
+    homelab/stack: backup
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: secrets-backup
+subjects:
+  - kind: ServiceAccount
+    name: secrets-backup-sa
     namespace: backup
