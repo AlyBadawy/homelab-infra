@@ -1,0 +1,26 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: infra-pdbs
+  namespace: argocd
+  labels:
+    homelab/stack: infrastructure
+  annotations:
+    # Wave 0: apply cluster policies early, before workloads
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: ${GITHUB_REPO}
+    targetRevision: main
+    path: k8s/infrastructure/pdbs
+    plugin:
+      name: kustomize-envsubst
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

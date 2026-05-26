@@ -10,6 +10,7 @@ resources:
   - db.yaml
   - immich.yaml
   - whoami.yaml
+  - infra-pdbs.yaml
   - infra-ingress-nginx.yaml
   - infra-longhorn.yaml
   - infra-longhorn-config.yaml

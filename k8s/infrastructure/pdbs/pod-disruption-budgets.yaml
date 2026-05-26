@@ -1,0 +1,97 @@
+# =============================================================================
+# Pod Disruption Budgets — Ensure zero downtime during updates
+# =============================================================================
+# PDBs prevent voluntary disruptions (e.g., during ArgoCD syncs)
+# ensuring at least minAvailable pods stay running during updates
+#
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: postgres-pdb
+  namespace: db
+  labels:
+    app.kubernetes.io/name: postgres
+    homelab/stack: db
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: authentik-server-pdb
+  namespace: auth
+  labels:
+    app.kubernetes.io/name: authentik
+    homelab/stack: auth
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: authentik
+      app.kubernetes.io/component: server
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nextcloud-pdb
+  namespace: cloud
+  labels:
+    app.kubernetes.io/name: nextcloud
+    homelab/stack: cloud
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nextcloud
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: immich-server-pdb
+  namespace: immich
+  labels:
+    app.kubernetes.io/name: immich-server
+    homelab/stack: immich
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: immich-server
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pgadmin-pdb
+  namespace: db
+  labels:
+    app.kubernetes.io/name: pgadmin
+    homelab/stack: db
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pgadmin
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: prometheus-grafana-pdb
+  namespace: monitor
+  labels:
+    app.kubernetes.io/name: prometheus-grafana
+    homelab/stack: monitor
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus-grafana

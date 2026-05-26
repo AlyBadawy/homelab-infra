@@ -41,7 +41,10 @@ metadata:
 spec:
   replicas: 1
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: pgadmin
@@ -50,6 +53,7 @@ spec:
       labels:
         app.kubernetes.io/name: pgadmin
     spec:
+      terminationGracePeriodSeconds: 30
       initContainers:
         - name: fix-permissions
           image: alpine:3.19
