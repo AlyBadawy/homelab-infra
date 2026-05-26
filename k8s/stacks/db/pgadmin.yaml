@@ -70,11 +70,11 @@ spec:
               mountPath: /var/lib/pgadmin
           resources:
             requests:
-              cpu: 50m
+              cpu: 200m
               memory: 128Mi
             limits:
-              cpu: 200m
-              memory: 256Mi
+              cpu: 500m
+              memory: 512Mi
       volumes:
         - name: data
           persistentVolumeClaim:
