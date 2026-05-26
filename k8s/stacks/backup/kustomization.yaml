@@ -6,3 +6,4 @@ resources:
   - backup-config.yaml
   - script-configmap.yaml
   - cronjob.yaml
+  - secrets-backup-job.yaml
