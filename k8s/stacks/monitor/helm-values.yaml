@@ -28,7 +28,7 @@ alertmanager:
         memory: 32Mi
       limits:
         cpu: 100m
-        memory: 64Mi
+        memory: 256Mi
 
 kubeEtcd:
   enabled: false
@@ -72,7 +72,7 @@ prometheus-node-exporter:
       memory: 32Mi
     limits:
       cpu: 100m
-      memory: 64Mi
+      memory: 256Mi
 
 kube-state-metrics:
   resources:
@@ -81,4 +81,4 @@ kube-state-metrics:
       memory: 32Mi
     limits:
       cpu: 100m
-      memory: 64Mi
+      memory: 256Mi
