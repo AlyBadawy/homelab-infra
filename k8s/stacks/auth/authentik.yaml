@@ -97,7 +97,7 @@ spec:
                 name: authentik-secret
           volumeMounts:
             - name: data
-              mountPath: /media
+              mountPath: /data
             - name: templates
               mountPath: /templates
           resources:
@@ -155,7 +155,7 @@ spec:
                 name: authentik-secret
           volumeMounts:
             - name: data
-              mountPath: /media
+              mountPath: /data
             - name: templates
               mountPath: /templates
           resources:
