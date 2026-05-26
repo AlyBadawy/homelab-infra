@@ -18,21 +18,6 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: authentik-templates
-  namespace: auth
-  labels:
-    app.kubernetes.io/name: authentik
-    homelab/stack: auth
-spec:
-  accessModes: [ReadWriteOnce]
-  storageClassName: local-path
-  resources:
-    requests:
-      storage: 1Gi
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
   name: authentik-templates-lh
   namespace: auth
   labels:
