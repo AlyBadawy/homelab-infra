@@ -13,6 +13,7 @@ controller:
     force-ssl-redirect: "true"
     use-forwarded-headers: "true"
     compute-full-forwarded-for: "true"
+    annotations-risk-level: "Critical"
   resources:
     requests:
       cpu: 100m
