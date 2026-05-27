@@ -30,7 +30,6 @@ spec:
             backend:
               service:
                 name: authentik-server
-                namespace: auth
                 port:
                   number: 9000
           # Main Longhorn UI
