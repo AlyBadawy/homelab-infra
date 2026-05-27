@@ -14,11 +14,19 @@ spec:
   tls:
     - hosts:
         - ${AUTHENTIK_HOST}
+      secretName: ${WILDCARD_SECRET}
   rules:
     - host: ${AUTHENTIK_HOST}
       http:
         paths:
           - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: authentik-server
+                port:
+                  number: 9000
+          - path: /outpost.goauthentik.io/
             pathType: Prefix
             backend:
               service:

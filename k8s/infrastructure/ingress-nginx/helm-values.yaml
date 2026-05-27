@@ -5,6 +5,7 @@
 controller:
   service:
     type: LoadBalancer
+  allowSnippetAnnotations: true
   # default-ssl-certificate is passed as helm.parameters in the ArgoCD Application
   # so the ${WILDCARD_SECRET} placeholder is substituted by the CMP at render time.
   config:
