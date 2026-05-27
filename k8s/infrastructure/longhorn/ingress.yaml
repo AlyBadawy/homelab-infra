@@ -29,7 +29,8 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: authentik-server.auth.svc.cluster.local
+                name: authentik-server
+                namespace: auth
                 port:
                   number: 9000
           # Main Longhorn UI
