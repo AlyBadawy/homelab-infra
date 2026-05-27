@@ -3,5 +3,6 @@ kind: Kustomization
 # Non-Helm monitor resources managed by ArgoCD (infra-monitor-config app).
 # The kube-prometheus-stack Helm chart is managed by the infra-monitor app.
 resources:
+  - authentik-external-service.yaml
   - ingress.yaml
   - longhorn-pvcs.yaml

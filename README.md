@@ -932,7 +932,9 @@ kubectl get pods -A --watch
 
 - [x] nginx-ingress (ingress-nginx, wave 0)
 - [x] Longhorn storage (infra-longhorn, wave 0)
-- [ ] Monitoring stack (Prometheus, Grafana) (via ArgoCD, wave 1)
+- [x] Monitoring stack (Prometheus, Grafana) (via ArgoCD, wave 1)
+  - [x] Prometheus protected with Authentik forward auth
+  - [x] AlertManager protected with Authentik forward auth
 - [ ] Databases (PostgreSQL, Redis) (via ArgoCD, wave 1)
 - [ ] Applications (Authentik, Nextcloud, Immich, etc.) (via ArgoCD, wave 2+)
 - [ ] Backup automation (via ArgoCD)
@@ -970,6 +972,36 @@ The homelab uses **ArgoCD** for true GitOps deployment. All Kubernetes applicati
 - **Sync waves:** Controlled deployment order (ingress → storage → databases → apps)
 
 **For detailed architecture documentation, see:** [GITOPS-ARCHITECTURE.md](GITOPS-ARCHITECTURE.md)
+
+## Authentication & Authorization
+
+### Authentik Forward Auth for Monitoring
+
+Prometheus and AlertManager are protected with **Authentik-based forward authentication** using nginx-ingress:
+
+- Users must authenticate via Authentik before accessing monitoring tools
+- Group-based authorization controls who can access which services
+- Session management and logout handled by Authentik
+
+**Setup Guide:** [AUTHENTIK-PROMETHEUS-ALERTMANAGER.md](docs/AUTHENTIK-PROMETHEUS-ALERTMANAGER.md)
+
+**Quick verification:**
+
+```bash
+# Verify ExternalName service exists in monitor namespace
+kubectl get svc -n monitor authentik-server -o wide
+
+# Check ingress has forward auth annotations
+kubectl get ingress -n monitor prometheus -o yaml | grep -A 5 "auth-url"
+
+# View Authentik outpost logs
+kubectl logs -n auth -l app.kubernetes.io/component=server -f | grep outpost
+```
+
+**Protected services:**
+- Prometheus: `https://${PROMETHEUS_HOST}` — requires authentication
+- AlertManager: `https://${ALERTMANAGER_HOST}` — requires authentication
+- Grafana: `https://${GRAFANA_HOST}` — managed separately
 
 ### Quick GitOps Workflow
 
