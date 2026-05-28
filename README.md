@@ -1052,6 +1052,77 @@ git push
 
 ---
 
+## Secrets & Configuration Backup
+
+### ⚠️ IMPORTANT: Extract Live Secrets Before Rebuild
+
+Before rebuilding the system, you MUST extract all secrets currently stored in your running Kubernetes cluster:
+
+**Live Secrets Extraction (PRIMARY METHOD - DO THIS FIRST):**
+
+Run on your homelab server before rebuild:
+
+```bash
+# SSH to your homelab server
+ssh homelab@172.20.20.3
+cd /path/to/homelab-infra
+
+# Option 1: Bash script
+./extract-live-secrets.sh
+
+# Option 2: Python script
+python3 extract-live-secrets.py
+```
+
+This extracts:
+- ✓ All manually-created secrets (via kubectl commands)
+- ✓ Database credentials
+- ✓ API keys and tokens
+- ✓ TLS certificates
+- ✓ ConfigMaps with sensitive data
+- ✓ All namespaces (argocd, db, cloud, auth, immich, monitor, backup, etc)
+
+**Output:** `secrets-live-backup-YYYYMMDD-HHMMSS.yaml`
+
+**Then secure it:**
+```bash
+# Encrypt the backup (recommended)
+gpg --encrypt --recipient your-email secrets-live-backup-*.yaml
+
+# Store in secure location
+cp secrets-live-backup-*.yaml.gpg /mnt/nas/backups/
+```
+
+**Resources:**
+- `LIVE-SECRETS-EXTRACTION-GUIDE.md` - Complete detailed guide
+- `LIVE-SECRETS-EXTRACTION-SUMMARY.txt` - Quick reference
+- `extract-live-secrets.sh` - Bash version
+- `extract-live-secrets.py` - Python version
+
+### Configuration Inventory (Secondary Reference)
+
+For understanding what configuration exists:
+
+**Backup Files:**
+- `secrets-backup.yaml` - Inventory of configuration and secret references
+- `SECRETS-BACKUP-GUIDE.md` - Bootstrap secrets documentation
+- `EXTRACTION-SUMMARY.txt` - Quick summary of structure
+- `extract-secrets.py` - Original configuration extraction script
+
+These files show **what configuration is defined** and **where it's used**, but not actual secret values.
+
+### Before Rebuilding Checklist
+
+- [ ] Run `./extract-live-secrets.sh` on homelab server
+- [ ] Encrypt the output file with GPG
+- [ ] Store backup in secure location (NAS, external drive)
+- [ ] Test restoration procedure (optional but recommended)
+- [ ] Document any custom secrets not captured
+- [ ] Only then proceed with: `./fresh-install.sh` or ansible playbooks
+- [ ] After new cluster ready: `kubectl apply -f secrets-live-backup-*.yaml`
+
+---
+
 ## Contributing
 
 This is a personal homelab setup. For improvements or additions:

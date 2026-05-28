@@ -1,0 +1,75 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║           HOMELAB SECRETS & CONFIGURATION EXTRACTION SUMMARY                 ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+EXTRACTION DATE: 2026-05-28
+
+FILES CREATED:
+  1. secrets-backup.yaml           - Machine-readable inventory (245 lines)
+  2. SECRETS-BACKUP-GUIDE.md       - Complete restoration guide
+  3. EXTRACTION-SUMMARY.txt        - This summary
+  4. extract-secrets.py            - Extraction script (reusable)
+
+WHAT WAS EXTRACTED:
+  ✓ 27 unique environment variables identified across deployments
+  ✓ 1 Kubernetes Secret reference (nextcloud-secret)
+  ✓ Cluster configuration from apply-secrets.yml
+  ✓ Ansible variables from bootstrap playbooks
+  ✓ All secret and configmap usage patterns
+
+EXTRACTED ENVIRONMENT VARIABLES:
+  Core Infrastructure:
+    - ALERTMANAGER_HOST, ARGOCD_HOST, AUTHENTIK_HOST, GRAFANA_HOST
+    - LONGHORN_HOST, NEXTCLOUD_HOST, PGADMIN_HOST, PROMETHEUS_HOST
+    - WHOAMI_HOST, IMMICH_HOST
+
+  Storage Configuration:
+    - NAS_BASE_EXPORT, NAS_BACKUPS_DIR, NAS_HOST_PATH, NAS_IMMICH_DATA
+    - NAS_NEXTCLOUD_DATA, NAS_POD_PATH, NAS_IP
+
+  System Configuration:
+    - DOMAIN, GITHUB_REPO, TIMEZONE, WILDCARD_SECRET
+
+  Job/Backup Variables:
+    - JOB, FILE, NS, NAMESPACE, PVC, SNAPSHOT_HOST, SNAPSHOT_POD, TIMESTAMP
+
+NAMESPACES DETECTED:
+  - argocd       (ArgoCD and cluster-vars ConfigMap)
+  - backup       (Backup jobs and scripts)
+  - cloud        (Nextcloud)
+  - db           (PostgreSQL, Redis, pgAdmin)
+  - monitor      (Grafana, Prometheus, Alertmanager)
+  - auth         (Authentik)
+  - immich       (Immich photo management)
+  - default      (Kubernetes system)
+
+SECRETS REFERENCED:
+  - nextcloud-secret (cloud namespace)
+    Required keys: DB_NAME, DB_USER, DB_PASS
+
+CONFIGMAPS REFERENCED:
+  - cluster-vars (argocd namespace)
+    Contains: DOMAIN, GITHUB_REPO, all service hostnames, NAS paths, TIMEZONE
+  
+  - script-configmap (backup namespace)
+    Contains: Backup and restore scripts
+
+CRITICAL LOCATIONS:
+  → /mnt/nas/homelab/secrets.yaml
+    ACTUAL SECRET VALUES STORED HERE
+    MUST BACKUP BEFORE REBUILD
+    Contains encrypted/actual credentials
+
+NEXT STEPS:
+  1. Review SECRETS-BACKUP-GUIDE.md for detailed restoration procedure
+  2. Verify /mnt/nas/homelab/secrets.yaml is backed up
+  3. Commit these backup files to git for future reference
+  4. Before rebuild, follow restore procedure in guide
+
+USAGE TIPS:
+  • secrets-backup.yaml is valid YAML - can be parsed programmatically
+  • extract-secrets.py can be re-run after configuration changes
+  • All environment variables are automatically substituted by ArgoCD CMP plugin
+  • Secrets file on NAS must exist before running apply-secrets.yml playbook
+
+═══════════════════════════════════════════════════════════════════════════════
