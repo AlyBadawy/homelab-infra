@@ -218,8 +218,10 @@ kubectl create namespace cloud
 
 ### Apply Backup
 
+The output file is clean YAML that can be directly applied:
+
 ```bash
-# Simple restore (will overwrite existing secrets)
+# Apply backup (will overwrite existing secrets with same names)
 kubectl apply -f secrets-live-backup-20260528-120000.yaml
 
 # Verify restoration
