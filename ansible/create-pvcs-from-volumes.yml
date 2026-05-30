@@ -87,7 +87,7 @@
         spec:
           accessModes:
             - ReadWriteOnce
-          storageClassName: longhorn
+          storageClassName: local-path
           resources:
             requests:
               storage: {{ (item.size / 1073741824) | int }}Gi

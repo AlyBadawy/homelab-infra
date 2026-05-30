@@ -3,7 +3,7 @@
 # =============================================================================
 # Single-replica setup for a homelab single-node k3s cluster.
 # Longhorn is NOT the default storage class — local-path remains default.
-# PVCs must explicitly set storageClassName: longhorn to use it.
+# PVCs must explicitly set storageClassName: local-path to use it.
 #
 # Backup target uses NFS so snapshots are exported to the NAS automatically.
 # The NFS export must exist on the NAS before Longhorn will go Ready.

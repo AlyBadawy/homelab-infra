@@ -200,7 +200,7 @@
         spec:
           accessModes:
             - ReadWriteOnce
-          storageClassName: longhorn
+          storageClassName: local-path
           resources:
             requests:
               storage: $size_k8s
@@ -222,7 +222,7 @@
         spec:
           accessModes:
             - ReadWriteOnce
-          storageClassName: longhorn
+          storageClassName: local-path
           resources:
             requests:
               storage: $size_k8s

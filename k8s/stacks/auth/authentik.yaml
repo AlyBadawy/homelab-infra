@@ -10,7 +10,7 @@ metadata:
     longhorn.io/pvc-namespace: auth
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: longhorn
+  storageClassName: local-path
   resources:
     requests:
       storage: 5Gi
@@ -27,7 +27,7 @@ metadata:
     longhorn.io/pvc-namespace: auth
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: longhorn
+  storageClassName: local-path
   resources:
     requests:
       storage: 1Gi

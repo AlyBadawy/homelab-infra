@@ -18,7 +18,7 @@ metadata:
     longhorn.io/pvc-namespace: monitor
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: longhorn
+  storageClassName: local-path
   resources:
     requests:
       storage: 5Gi

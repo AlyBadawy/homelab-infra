@@ -10,7 +10,7 @@ metadata:
     longhorn.io/pvc-namespace: cloud
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: longhorn
+  storageClassName: local-path
   resources:
     requests:
       storage: 10Gi
